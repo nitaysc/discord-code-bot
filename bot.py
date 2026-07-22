@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import textwrap
+from collections import deque
 
 import discord
 from discord import app_commands
@@ -56,6 +57,21 @@ CREATE_KEYWORDS = [
     "make", "create", "write", "generate", "build", "code", "script",
     "program", "file", "give me", "send me", "show me", "output",
 ]
+
+MAX_HISTORY = 20
+message_history: dict[int, deque[dict]] = {}
+
+
+def get_history(channel_id: int) -> list[dict]:
+    if channel_id not in message_history:
+        return []
+    return list(message_history[channel_id])
+
+
+def add_to_history(channel_id: int, role: str, content: str):
+    if channel_id not in message_history:
+        message_history[channel_id] = deque(maxlen=MAX_HISTORY)
+    message_history[channel_id].append({"role": role, "content": content})
 
 CHAT_SYSTEM = textwrap.dedent("""\
 You are Null, a friendly coding assistant in a Discord server. You are chill, concise, and cool.
@@ -164,21 +180,25 @@ async def send_raw_file(channel, content: str, file_type: str | None):
     os.unlink(tmp.name)
 
 
-def _call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int = 4096) -> str:
+def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
+              temperature: float = 0.5, max_tokens: int = 4096) -> str:
+    messages = [{"role": "system", "content": system}]
+    if history:
+        messages.extend(history)
+    messages.append({"role": "user", "content": prompt})
+
     response = client.chat.completions.create(
         model=MODEL,
-        messages=[
-            {"role": "system", "content": system},
-            {"role": "user", "content": prompt},
-        ],
+        messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
     )
     return response.choices[0].message.content or ""
 
 
-async def call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int = 4096) -> str:
-    return await asyncio.to_thread(_call_ai, system, prompt, temperature, max_tokens)
+async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
+                  temperature: float = 0.5, max_tokens: int = 4096) -> str:
+    return await asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens)
 
 
 BINARY_ALTERNATIVES = {
@@ -236,6 +256,8 @@ GENERIC_BINARY_MSG = (
 
 async def handle_create_request(channel, prompt: str, reply_target=None):
     file_type, file_kind = detect_file_type(prompt)
+    channel_id = channel.id
+    history = get_history(channel_id)
 
     if file_kind == "binary":
         alt = BINARY_ALTERNATIVES.get(file_type)
@@ -243,7 +265,7 @@ async def handle_create_request(channel, prompt: str, reply_target=None):
             source_prompt = prompt.replace(
                 f".{file_type}", f"python script"
             ).replace(file_type, "Python script")
-            text = await call_ai(CODE_SYSTEM, source_prompt, temperature=0.2)
+            text = await call_ai(CODE_SYSTEM, source_prompt, history, temperature=0.2)
             code_blocks = extract_code_blocks(text)
             if code_blocks:
                 msg = f":white_check_mark: Here's the source for your .{file_type}:\n{alt['instructions']}"
@@ -275,7 +297,7 @@ async def handle_create_request(channel, prompt: str, reply_target=None):
 
     is_code_type = file_type in LANG_EXTENSIONS or file_type is None
     system = CODE_SYSTEM if is_code_type else CHAT_SYSTEM
-    text = await call_ai(system, prompt, temperature=0.2)
+    text = await call_ai(system, prompt, history, temperature=0.2)
 
     code_blocks = extract_code_blocks(text)
     if code_blocks:
@@ -342,12 +364,17 @@ async def on_message(message):
 
         print(f"[CHAT] {message.author}: {content}")
 
+        channel_id = message.channel.id
+        add_to_history(channel_id, "user", f"{message.author.display_name}: {content}")
+
         async with message.channel.typing():
             try:
                 if is_create_request(content):
                     await handle_create_request(message.channel, content, reply_target=message)
                 else:
-                    answer = await call_ai(CHAT_SYSTEM, content, temperature=0.7)
+                    history = get_history(channel_id)
+                    answer = await call_ai(CHAT_SYSTEM, content, history, temperature=0.7)
+                    add_to_history(channel_id, "assistant", answer)
                     code_blocks = extract_code_blocks(answer)
                     await message.reply(answer, mention_author=False)
                     if code_blocks:
@@ -362,11 +389,15 @@ async def on_message(message):
 @bot.tree.command(name="hey", description="Chat with Null or ask it to create files")
 async def slash_hey(interaction: discord.Interaction, message: str):
     await interaction.response.defer()
+    channel_id = interaction.channel_id
+    add_to_history(channel_id, "user", f"{interaction.user.display_name}: {message}")
     try:
         if is_create_request(message):
             await handle_create_request(interaction.channel, message)
         else:
-            answer = await call_ai(CHAT_SYSTEM, message, temperature=0.7)
+            history = get_history(channel_id)
+            answer = await call_ai(CHAT_SYSTEM, message, history, temperature=0.7)
+            add_to_history(channel_id, "assistant", answer)
             code_blocks = extract_code_blocks(answer)
             await interaction.followup.send(answer)
             if code_blocks:
@@ -436,8 +467,12 @@ async def slash_file(interaction: discord.Interaction, file_type: str, descripti
 @bot.tree.command(name="ask", description="Ask Null a question")
 async def slash_ask(interaction: discord.Interaction, question: str):
     await interaction.response.defer()
+    channel_id = interaction.channel_id
+    add_to_history(channel_id, "user", f"{interaction.user.display_name}: {question}")
     try:
-        answer = await call_ai(CHAT_SYSTEM, question, temperature=0.7)
+        history = get_history(channel_id)
+        answer = await call_ai(CHAT_SYSTEM, question, history, temperature=0.7)
+        add_to_history(channel_id, "assistant", answer)
         code_blocks = extract_code_blocks(answer)
         await interaction.followup.send(answer)
         if code_blocks:
