@@ -11,6 +11,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
 import wavelink
+from duckduckgo_search import DDGS
 
 load_dotenv()
 
@@ -25,6 +26,51 @@ client = OpenAI(
     base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
     api_key=GEMINI_KEY,
 )
+
+
+async def web_search(query: str, max_results: int = 5) -> str:
+    try:
+        results = await asyncio.to_thread(
+            lambda: list(DDGS().text(query, max_results=max_results))
+        )
+        if not results:
+            return ""
+        lines = []
+        for i, r in enumerate(results, 1):
+            title = r.get("title", "")
+            snippet = r.get("body", "")
+            link = r.get("href", "")
+            lines.append(f"[{i}] {title}\n{snippet}\n{link}")
+        return "\n\n".join(lines)
+    except Exception as e:
+        return f"Search error: {e}"
+
+
+async def should_search(question: str) -> tuple[bool, str]:
+    prompt = (
+        "You are a classifier. Decide if the following user question needs "
+        "up-to-date internet information to answer correctly. "
+        "Examples that need search: current news, weather, sports scores, prices, "
+        "recent events, today's date, latest updates, anything time-sensitive, "
+        "or facts you may not know. "
+        "Reply with ONLY 'YES: <search query>' or 'NO'.\n\n"
+        f"Question: {question}"
+    )
+    try:
+        answer = await call_ai(
+            "You are a helpful classifier.",
+            prompt,
+            temperature=0.0,
+            max_tokens=100,
+        )
+        answer = answer.strip()
+        if answer.upper().startswith("YES:"):
+            search_query = answer[4:].strip() or question
+            return True, search_query
+        return False, ""
+    except Exception:
+        return False, ""
+
 
 LANG_EXTENSIONS = {
     "lua": ".lua", "luau": ".luau", "python": ".py", "py": ".py",
@@ -73,6 +119,7 @@ def add_to_history(channel_id: int, role: str, content: str):
 CHAT_CAPABILITIES = """
 MY CAPABILITIES:
 - Play music: /play <song name>, /play <YouTube URL>. Also /skip /stop /queue /pause /resume /volume.
+- Search the web: /search <query>, or ask me anything and I will search if I need current info.
 - Generate ANY file: /lua, /script, /file, or just say "make me a .file type..."
 - Create .exe source with compile instructions
 - Read & summarize channels: /read #channel
@@ -220,6 +267,28 @@ async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
                   temperature: float = 0.5, max_tokens: int = 4096,
                   image_urls: list[str] | None = None) -> str:
     return await asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls)
+
+
+async def answer_with_web_search_if_needed(
+    prompt: str,
+    history: list[dict] | None = None,
+    image_urls: list[str] | None = None,
+    temperature: float = 0.7,
+) -> str:
+    needs_search, search_query = await should_search(prompt)
+    if needs_search:
+        search_results = await web_search(search_query, max_results=5)
+        if search_results:
+            if search_results.startswith("Search error:"):
+                enhanced_prompt = f"{prompt}\n\n[Web search failed: {search_results}]"
+            else:
+                enhanced_prompt = (
+                    f"{prompt}\n\n[Web search results for '{search_query}':\n"
+                    f"{search_results}\n\n"
+                    f"Use the above search results to answer if helpful."
+                )
+            return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
+    return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
 
 
 BINARY_ALTERNATIVES = {
@@ -453,8 +522,9 @@ async def on_message(message):
 
                     history = get_history(channel_id)
                     prompt = content + context_extra
-                    answer = await call_ai(CHAT_SYSTEM, prompt, history, temperature=0.7,
-                                          image_urls=image_urls if image_urls else None)
+                    answer = await answer_with_web_search_if_needed(
+                        prompt, history, image_urls=image_urls if image_urls else None
+                    )
                     add_to_history(channel_id, "assistant", answer)
                     code_blocks = extract_code_blocks(answer)
                     await message.reply(answer, mention_author=False)
@@ -477,7 +547,7 @@ async def slash_hey(interaction: discord.Interaction, message: str):
             await handle_create_request(interaction.channel, message)
         else:
             history = get_history(channel_id)
-            answer = await call_ai(CHAT_SYSTEM, message, history, temperature=0.7)
+            answer = await answer_with_web_search_if_needed(message, history)
             add_to_history(channel_id, "assistant", answer)
             code_blocks = extract_code_blocks(answer)
             await interaction.followup.send(answer)
@@ -485,6 +555,30 @@ async def slash_hey(interaction: discord.Interaction, message: str):
                 await send_files(interaction.channel, code_blocks)
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
+
+
+@bot.tree.command(name="search", description="Search the web and get an answer")
+@app_commands.describe(query="What to search for")
+async def slash_search(interaction: discord.Interaction, query: str):
+    await interaction.response.defer()
+    try:
+        results = await web_search(query, max_results=5)
+        if not results:
+            await interaction.followup.send(":x: No search results found.")
+            return
+        if results.startswith("Search error:"):
+            await interaction.followup.send(f":x: {results}")
+            return
+        summary = await call_ai(
+            CHAT_SYSTEM,
+            f"Search query: {query}\n\nSearch results:\n{results}\n\n"
+            "Answer the query concisely using the search results. Include relevant links.",
+            temperature=0.5,
+            max_tokens=1500,
+        )
+        await interaction.followup.send(summary[:2000])
+    except Exception as e:
+        await interaction.followup.send(f":x: Search failed: {e}")
 
 
 @bot.tree.command(name="lua", description="Generate a Lua/Roblox script")

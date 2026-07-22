@@ -2,3 +2,4 @@ discord.py[voice]>=2.7.0
 python-dotenv>=1.0
 openai>=1.0
 wavelink>=3.0
+duckduckgo-search>=6.0
