@@ -426,11 +426,13 @@ _xp_cooldowns: dict[tuple[int, int], float] = {}
 
 def add_message_xp(guild_id: int, user_id: int, channel_id: int, role_ids: list[int]) -> tuple[int, int, bool] | None:
     if _is_blacklisted(guild_id, channel_id, role_ids):
+        print(f"[XP] blacklisted: guild={guild_id} user={user_id} channel={channel_id}")
         return None
     now = datetime.now(timezone.utc).timestamp()
     key = (guild_id, user_id)
     cooldown = float(_get_setting(guild_id, "cooldown", 30))
     if key in _xp_cooldowns and now - _xp_cooldowns[key] < cooldown:
+        print(f"[XP] cooldown: guild={guild_id} user={user_id} remaining={cooldown - (now - _xp_cooldowns[key]):.1f}s")
         return None
     _xp_cooldowns[key] = now
     min_xp = int(_get_setting(guild_id, "min_xp", 15))
@@ -438,6 +440,7 @@ def add_message_xp(guild_id: int, user_id: int, channel_id: int, role_ids: list[
     gained = random.randint(min_xp, max_xp)
     mult = _get_multiplier(guild_id, channel_id, role_ids)
     gained = int(gained * mult)
+    print(f"[XP] adding: guild={guild_id} user={user_id} amount={gained}")
     return _apply_xp(guild_id, user_id, gained, "message")
 
 
@@ -481,6 +484,7 @@ def _apply_xp(guild_id: int, user_id: int, amount: int, source: str) -> tuple[in
         )
     conn.commit()
     conn.close()
+    print(f"[XP] saved: guild={guild_id} user={user_id} xp={new_xp} level={new_level} leveled_up={leveled_up}")
     return new_xp, new_level, leveled_up
 
 
@@ -1327,7 +1331,9 @@ async def on_message(message):
                 if leveled_up:
                     await handle_level_up(message.author, message.channel, level)
         except Exception as e:
+            import traceback
             print(f"XP error: {e}")
+            traceback.print_exc()
 
     await bot.process_commands(message)
 
