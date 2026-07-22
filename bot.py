@@ -623,17 +623,8 @@ YTDL_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
-    "default_search": "ytsearch",
+    "default_search": "scsearch",
     "extract_flat": "in_playlist",
-    "extractor_args": {
-        "youtube": {
-            "player_client": ["web_safari", "ios"],
-            "player_skip": ["configs", "webpage"],
-        }
-    },
-    "headers": {
-        "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-    },
 }
 
 FFMPEG_OPTS = {
