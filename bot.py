@@ -655,10 +655,10 @@ Output ONLY the code in a code block with `lua` language tag. No explanations ou
 
 CRITICAL API RULES — never violate these:
 - natives.load_natives() takes NO arguments. Never write natives.load_natives(number).
-- commandmgr.add_looped_command takes 6 arguments: id, label, description, tick_function, on_enable_function, on_disable_function.
+- commandmgr.add_looped_command takes 6 arguments: id, label, description, tick_function, on_enable_function, on_disable_function. Always include the on_enable and on_disable callbacks.
 - Handles returned by GET_VEHICLE_PED_IS_IN or PLAYER_PED_ID can be 0. Check with `if handle ~= 0 then`, never `if handle then`.
 - ENTITY.SET_ENTITY_VELOCITY takes separate x, y, z numbers: SET_ENTITY_VELOCITY(ent, x, y, z). Never pass a Vector3 object.
-- VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, 0) is the correct way to stop a vehicle instantly.
+- For a true instant vehicle stop, always use BOTH `VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, 0)` AND `ENTITY.SET_ENTITY_VELOCITY(veh, 0, 0, 0)` together.
 - PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
 - PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
 
