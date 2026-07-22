@@ -240,10 +240,23 @@ USE_POSTGRES = bool(DATABASE_URL)
 if USE_POSTGRES:
     try:
         import psycopg2
+        from psycopg2 import pool as psycopg2_pool
     except ImportError:
         psycopg2 = None
+        psycopg2_pool = None
 else:
     psycopg2 = None
+    psycopg2_pool = None
+
+_pg_pool = None
+_pg_schema_initialized = False
+
+
+def _get_pg_pool():
+    global _pg_pool
+    if _pg_pool is None and psycopg2_pool:
+        _pg_pool = psycopg2_pool.ThreadedConnectionPool(2, 10, DATABASE_URL)
+    return _pg_pool
 
 
 class _PostgresCursor:
@@ -264,8 +277,9 @@ class _PostgresCursor:
 
 
 class _PostgresConnection:
-    def __init__(self, conn):
+    def __init__(self, conn, pool):
         self._conn = conn
+        self._pool = pool
 
     def cursor(self):
         return _PostgresCursor(self._conn.cursor())
@@ -316,7 +330,10 @@ class _PostgresConnection:
         self._conn.commit()
 
     def close(self):
-        self._conn.close()
+        if self._pool:
+            self._pool.putconn(self._conn)
+        else:
+            self._conn.close()
 
 
 SCHEMA_SCRIPT_SQLITE = """
@@ -479,12 +496,25 @@ END $$;
 
 
 def get_db():
+    global _pg_schema_initialized
     if USE_POSTGRES and psycopg2:
+        pg_pool = _get_pg_pool()
+        if pg_pool:
+            conn = pg_pool.getconn()
+            wrapper = _PostgresConnection(conn, pg_pool)
+            if not _pg_schema_initialized:
+                wrapper.executescript(SCHEMA_SCRIPT_POSTGRES)
+                wrapper.executescript(PG_MIGRATION_SCRIPT)
+                wrapper.commit()
+                _pg_schema_initialized = True
+            return wrapper
         conn = psycopg2.connect(DATABASE_URL)
-        wrapper = _PostgresConnection(conn)
-        wrapper.executescript(SCHEMA_SCRIPT_POSTGRES)
-        wrapper.executescript(PG_MIGRATION_SCRIPT)
-        wrapper.commit()
+        wrapper = _PostgresConnection(conn, None)
+        if not _pg_schema_initialized:
+            wrapper.executescript(SCHEMA_SCRIPT_POSTGRES)
+            wrapper.executescript(PG_MIGRATION_SCRIPT)
+            wrapper.commit()
+            _pg_schema_initialized = True
         return wrapper
     conn = sqlite3.connect(DB_PATH)
     conn.executescript(SCHEMA_SCRIPT_SQLITE)
@@ -868,9 +898,9 @@ def _delete_ticket_db(channel_id: int):
     conn.close()
 
 
-async def _generate_transcript(channel: discord.TextChannel) -> str:
+async def _generate_transcript(channel: discord.TextChannel, limit: int = 100) -> str:
     lines = []
-    async for msg in channel.history(limit=1000, oldest_first=True):
+    async for msg in channel.history(limit=limit, oldest_first=True):
         timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
         content = msg.content or ""
         lines.append(f"[{timestamp}] {msg.author.display_name}: {content}")
@@ -991,8 +1021,7 @@ class ConfirmCloseView(discord.ui.View):
                     await log_ch.send(embed=embed, file=discord.File(buffer, filename=f"{channel.name}-transcript.txt"))
                 else:
                     await log_ch.send(embed=embed)
-        await interaction.followup.send(":white_check_mark: Closing ticket...")
-        await asyncio.sleep(2)
+        await interaction.followup.send(":white_check_mark: Ticket closed.")
         await channel.delete()
 
     @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ticket_cancel_close")
