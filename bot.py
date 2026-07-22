@@ -319,7 +319,7 @@ class _PostgresConnection:
         self._conn.close()
 
 
-SCHEMA_SCRIPT = """
+SCHEMA_SCRIPT_SQLITE = """
 CREATE TABLE IF NOT EXISTS levels (
     guild_id BIGINT NOT NULL,
     user_id BIGINT NOT NULL,
@@ -354,6 +354,101 @@ CREATE TABLE IF NOT EXISTS xp_multipliers (
     multiplier REAL NOT NULL,
     PRIMARY KEY (guild_id, target_id, target_type)
 );
+CREATE TABLE IF NOT EXISTS ticket_settings (
+    guild_id BIGINT PRIMARY KEY,
+    category_id BIGINT,
+    log_channel_id BIGINT,
+    support_role_id BIGINT,
+    welcome_message TEXT DEFAULT 'Support will be with you shortly.',
+    transcript_enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS ticket_panels (
+    panel_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    label TEXT NOT NULL,
+    emoji TEXT,
+    description TEXT,
+    category_id BIGINT,
+    support_role_id BIGINT
+);
+CREATE TABLE IF NOT EXISTS tickets (
+    ticket_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    claimed_by BIGINT,
+    status TEXT DEFAULT 'open',
+    created_at REAL DEFAULT 0,
+    closed_at REAL
+);
+"""
+
+SCHEMA_SCRIPT_POSTGRES = """
+CREATE TABLE IF NOT EXISTS levels (
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    xp BIGINT DEFAULT 0,
+    messages INTEGER DEFAULT 0,
+    voice_minutes INTEGER DEFAULT 0,
+    last_xp REAL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS level_settings (
+    guild_id BIGINT NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (guild_id, key)
+);
+CREATE TABLE IF NOT EXISTS role_rewards (
+    guild_id BIGINT NOT NULL,
+    level INTEGER NOT NULL,
+    role_id BIGINT NOT NULL,
+    PRIMARY KEY (guild_id, level)
+);
+CREATE TABLE IF NOT EXISTS xp_blacklist (
+    guild_id BIGINT NOT NULL,
+    target_id BIGINT NOT NULL,
+    target_type TEXT NOT NULL,
+    PRIMARY KEY (guild_id, target_id, target_type)
+);
+CREATE TABLE IF NOT EXISTS xp_multipliers (
+    guild_id BIGINT NOT NULL,
+    target_id BIGINT NOT NULL,
+    target_type TEXT NOT NULL,
+    multiplier REAL NOT NULL,
+    PRIMARY KEY (guild_id, target_id, target_type)
+);
+CREATE TABLE IF NOT EXISTS ticket_settings (
+    guild_id BIGINT PRIMARY KEY,
+    category_id BIGINT,
+    log_channel_id BIGINT,
+    support_role_id BIGINT,
+    welcome_message TEXT DEFAULT 'Support will be with you shortly.',
+    transcript_enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS ticket_panels (
+    panel_id SERIAL PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    message_id BIGINT NOT NULL,
+    label TEXT NOT NULL,
+    emoji TEXT,
+    description TEXT,
+    category_id BIGINT,
+    support_role_id BIGINT
+);
+CREATE TABLE IF NOT EXISTS tickets (
+    ticket_id SERIAL PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    claimed_by BIGINT,
+    status TEXT DEFAULT 'open',
+    created_at REAL DEFAULT 0,
+    closed_at REAL
+);
 """
 
 PG_MIGRATION_SCRIPT = """
@@ -387,12 +482,12 @@ def get_db():
     if USE_POSTGRES and psycopg2:
         conn = psycopg2.connect(DATABASE_URL)
         wrapper = _PostgresConnection(conn)
-        wrapper.executescript(SCHEMA_SCRIPT)
+        wrapper.executescript(SCHEMA_SCRIPT_POSTGRES)
         wrapper.executescript(PG_MIGRATION_SCRIPT)
         wrapper.commit()
         return wrapper
     conn = sqlite3.connect(DB_PATH)
-    conn.executescript(SCHEMA_SCRIPT)
+    conn.executescript(SCHEMA_SCRIPT_SQLITE)
     conn.commit()
     return conn
 
@@ -617,6 +712,314 @@ def get_leaderboard(guild_id: int, limit: int = 10) -> list[tuple[int, int, int]
     rows = cur.fetchall()
     conn.close()
     return [(user_id, xp, level_from_xp(xp)) for user_id, xp in rows]
+
+
+# --- Ticket system ---
+
+TICKET_SETTINGS_COLUMNS = {
+    "category_id": "BIGINT",
+    "log_channel_id": "BIGINT",
+    "support_role_id": "BIGINT",
+    "welcome_message": "TEXT",
+    "transcript_enabled": "INTEGER",
+}
+
+
+def _get_ticket_settings(guild_id: int) -> dict:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT category_id, log_channel_id, support_role_id, welcome_message, transcript_enabled "
+        "FROM ticket_settings WHERE guild_id = ?",
+        (guild_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return {
+            "category_id": None,
+            "log_channel_id": None,
+            "support_role_id": None,
+            "welcome_message": "Support will be with you shortly.",
+            "transcript_enabled": "1",
+        }
+    category_id, log_channel_id, support_role_id, welcome_message, transcript_enabled = row
+    return {
+        "category_id": int(category_id) if category_id else None,
+        "log_channel_id": int(log_channel_id) if log_channel_id else None,
+        "support_role_id": int(support_role_id) if support_role_id else None,
+        "welcome_message": welcome_message or "Support will be with you shortly.",
+        "transcript_enabled": str(transcript_enabled) if transcript_enabled is not None else "1",
+    }
+
+
+def _set_ticket_settings(guild_id: int, **kwargs):
+    allowed = set(TICKET_SETTINGS_COLUMNS.keys())
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return
+    columns = ", ".join(updates.keys())
+    placeholders = ", ".join("?" for _ in updates)
+    sql = (
+        f"INSERT INTO ticket_settings (guild_id, {columns}) VALUES (?, {placeholders}) "
+        f"ON CONFLICT(guild_id) DO UPDATE SET "
+        + ", ".join(f"{col} = excluded.{col}" for col in updates.keys())
+    )
+    values = [guild_id] + list(updates.values())
+    conn = get_db()
+    conn.execute(sql, values)
+    conn.commit()
+    conn.close()
+
+
+def _create_ticket(guild_id: int, channel_id: int, user_id: int):
+    now = datetime.now(timezone.utc).timestamp()
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO tickets (guild_id, channel_id, user_id, created_at) VALUES (?, ?, ?, ?)",
+        (guild_id, channel_id, user_id, now),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _get_ticket_by_channel(channel_id: int) -> dict | None:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT ticket_id, guild_id, channel_id, user_id, claimed_by, status, created_at FROM tickets WHERE channel_id = ? AND status = 'open'",
+        (channel_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "ticket_id": row[0],
+        "guild_id": row[1],
+        "channel_id": row[2],
+        "user_id": row[3],
+        "claimed_by": row[4],
+        "status": row[5],
+        "created_at": row[6],
+    }
+
+
+def _get_ticket_by_user(guild_id: int, user_id: int) -> dict | None:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT ticket_id, guild_id, channel_id, user_id, claimed_by, status, created_at FROM tickets WHERE guild_id = ? AND user_id = ? AND status = 'open'",
+        (guild_id, user_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "ticket_id": row[0],
+        "guild_id": row[1],
+        "channel_id": row[2],
+        "user_id": row[3],
+        "claimed_by": row[4],
+        "status": row[5],
+        "created_at": row[6],
+    }
+
+
+def _claim_ticket(channel_id: int, user_id: int):
+    conn = get_db()
+    conn.execute(
+        "UPDATE tickets SET claimed_by = ? WHERE channel_id = ?",
+        (user_id, channel_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _close_ticket_db(channel_id: int):
+    now = datetime.now(timezone.utc).timestamp()
+    conn = get_db()
+    conn.execute(
+        "UPDATE tickets SET status = 'closed', closed_at = ? WHERE channel_id = ?",
+        (now, channel_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _save_ticket_panel(guild_id: int, channel_id: int, message_id: int, label: str, emoji: str, description: str):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO ticket_panels (guild_id, channel_id, message_id, label, emoji, description) VALUES (?, ?, ?, ?, ?, ?)",
+        (guild_id, channel_id, message_id, label, emoji, description),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _delete_ticket_db(channel_id: int):
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM tickets WHERE channel_id = ?",
+        (channel_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+async def _generate_transcript(channel: discord.TextChannel) -> str:
+    lines = []
+    async for msg in channel.history(limit=1000, oldest_first=True):
+        timestamp = msg.created_at.strftime("%Y-%m-%d %H:%M:%S")
+        content = msg.content or ""
+        lines.append(f"[{timestamp}] {msg.author.display_name}: {content}")
+        for att in msg.attachments:
+            lines.append(f"[{timestamp}] {msg.author.display_name} attached: {att.url}")
+    return "\n".join(lines)
+
+
+def _ticket_overwrites(guild: discord.Guild, user: discord.Member, support_role_id: int | None):
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(view_channel=False),
+        user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+        guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_messages=True),
+    }
+    if support_role_id:
+        role = guild.get_role(int(support_role_id))
+        if role:
+            overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True)
+    return overwrites
+
+
+async def _create_ticket_channel(guild: discord.Guild, user: discord.Member, settings: dict) -> discord.TextChannel:
+    category_id = settings.get("category_id")
+    support_role_id = settings.get("support_role_id")
+    category = guild.get_channel(int(category_id)) if category_id else None
+    overwrites = _ticket_overwrites(guild, user, support_role_id)
+    safe_name = re.sub(r"[^a-z0-9\-]", "", user.display_name.lower().replace(" ", "-"))[:40]
+    if not safe_name:
+        safe_name = "user"
+    channel_name = f"ticket-{safe_name}"
+    suffix = 1
+    while discord.utils.get(guild.text_channels, name=channel_name):
+        channel_name = f"ticket-{safe_name}-{suffix}"
+        suffix += 1
+    if category and isinstance(category, discord.CategoryChannel):
+        channel = await guild.create_text_channel(channel_name, category=category, overwrites=overwrites)
+    else:
+        channel = await guild.create_text_channel(channel_name, overwrites=overwrites)
+    return channel
+
+
+async def _send_ticket_welcome(channel: discord.TextChannel, user: discord.Member, settings: dict):
+    welcome = settings.get("welcome_message") or "Support will be with you shortly."
+    embed = discord.Embed(
+        title=":ticket: Ticket Opened",
+        description=f"Hey {user.mention},\n{welcome}",
+        color=discord.Color.green(),
+    )
+    view = TicketControlView()
+    msg = await channel.send(embed=embed, view=view)
+    await msg.pin()
+
+
+class TicketControlView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="", custom_id="ticket_claim")
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
+        if not ticket:
+            await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+            return
+        if ticket["claimed_by"]:
+            claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
+            name = claimer.mention if claimer else "someone"
+            await interaction.response.send_message(f":x: Already claimed by {name}.", ephemeral=True)
+            return
+        await asyncio.to_thread(_claim_ticket, interaction.channel_id, interaction.user.id)
+        await interaction.response.send_message(f":white_check_mark: Claimed by {interaction.user.mention}")
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="", custom_id="ticket_close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
+        if not ticket:
+            await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+            return
+        view = ConfirmCloseView()
+        await interaction.response.send_message("Are you sure you want to close this ticket?", view=view, ephemeral=True)
+
+
+class ConfirmCloseView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="Yes, close", style=discord.ButtonStyle.danger, custom_id="ticket_confirm_close")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
+        channel = interaction.channel
+        ticket = await asyncio.to_thread(_get_ticket_by_channel, channel.id)
+        if not ticket:
+            await interaction.followup.send(":x: Ticket not found.", ephemeral=True)
+            return
+        settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
+        transcript = ""
+        if settings.get("transcript_enabled") == "1":
+            transcript = await _generate_transcript(channel)
+        await asyncio.to_thread(_close_ticket_db, channel.id)
+        log_channel_id = settings.get("log_channel_id")
+        if log_channel_id:
+            log_ch = interaction.guild.get_channel(int(log_channel_id))
+            if log_ch:
+                user = interaction.guild.get_member(int(ticket["user_id"]))
+                user_name = user.mention if user else f"User {ticket['user_id']}"
+                embed = discord.Embed(
+                    title=":ticket: Ticket Closed",
+                    description=f"Ticket {channel.name} closed by {interaction.user.mention}",
+                    color=discord.Color.red(),
+                )
+                embed.add_field(name="Opened by", value=user_name, inline=True)
+                if ticket["claimed_by"]:
+                    claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
+                    embed.add_field(name="Claimed by", value=claimer.mention if claimer else "Unknown", inline=True)
+                if transcript:
+                    buffer = io.BytesIO(transcript.encode("utf-8"))
+                    await log_ch.send(embed=embed, file=discord.File(buffer, filename=f"{channel.name}-transcript.txt"))
+                else:
+                    await log_ch.send(embed=embed)
+        await interaction.followup.send(":white_check_mark: Closing ticket...")
+        await asyncio.sleep(2)
+        await channel.delete()
+
+    @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary, custom_id="ticket_cancel_close")
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message(":x: Close cancelled.", ephemeral=True)
+
+
+class TicketPanelView(discord.ui.View):
+    def __init__(self, panel_id: int):
+        super().__init__(timeout=None)
+        self.panel_id = panel_id
+
+    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.green, emoji="", custom_id="ticket_panel_create")
+    async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
+        settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
+        if not settings.get("category_id"):
+            await interaction.followup.send(":x: Ticket system is not set up. Ask an admin to run `/ticketsetup`.", ephemeral=True)
+            return
+        existing = await asyncio.to_thread(_get_ticket_by_user, interaction.guild.id, interaction.user.id)
+        if existing:
+            channel = interaction.guild.get_channel(int(existing["channel_id"]))
+            if channel:
+                await interaction.followup.send(f":x: You already have an open ticket: {channel.mention}", ephemeral=True)
+                return
+        channel = await _create_ticket_channel(interaction.guild, interaction.user, settings)
+        await asyncio.to_thread(_create_ticket, interaction.guild.id, channel.id, interaction.user.id)
+        await _send_ticket_welcome(channel, interaction.user, settings)
+        await interaction.followup.send(f":white_check_mark: Ticket created: {channel.mention}", ephemeral=True)
 
 
 async def fetch_avatar(url: str) -> bytes:
@@ -1233,6 +1636,8 @@ class CodeBot(commands.Bot):
                 print(f"Wavelink failed {node.uri}: {e}")
         else:
             print("WARNING: Could not connect to any public Lavalink node.")
+        self.add_view(TicketPanelView(0))
+        self.add_view(TicketControlView())
         self.voice_xp_task.start()
 
     async def on_ready(self):
@@ -1655,6 +2060,176 @@ async def slash_removexpmultiplier(
     conn.commit()
     conn.close()
     await interaction.response.send_message(f":white_check_mark: XP multiplier removed.")
+
+
+@bot.tree.command(name="ticketsetup", description="Set up the ticket system (Admin only)")
+@app_commands.describe(
+    category="Category where ticket channels are created",
+    log_channel="Channel where ticket transcripts are logged",
+    support_role="Role that can view tickets",
+    welcome_message="Message shown when a ticket opens",
+)
+async def slash_ticketsetup(
+    interaction: discord.Interaction,
+    category: discord.CategoryChannel,
+    log_channel: discord.TextChannel,
+    support_role: discord.Role,
+    welcome_message: str = "Support will be with you shortly.",
+):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    await asyncio.to_thread(
+        _set_ticket_settings,
+        interaction.guild.id,
+        category_id=category.id,
+        log_channel_id=log_channel.id,
+        support_role_id=support_role.id,
+        welcome_message=welcome_message,
+    )
+    await interaction.response.send_message(
+        f":white_check_mark: Ticket system set up.\n"
+        f"Category: {category.mention}\n"
+        f"Log channel: {log_channel.mention}\n"
+        f"Support role: {support_role.mention}",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="ticketpanel", description="Create a ticket panel message (Admin only)")
+@app_commands.describe(
+    label="Button label",
+    emoji="Button emoji",
+    description="Description shown in the embed",
+    channel="Channel to send the panel in (default: current)",
+)
+async def slash_ticketpanel(
+    interaction: discord.Interaction,
+    label: str = "Create Ticket",
+    emoji: str = "",
+    description: str = "Click the button below to open a support ticket.",
+    channel: discord.TextChannel = None,
+):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    target = channel or interaction.channel
+    embed = discord.Embed(
+        title=":ticket: Support Tickets",
+        description=description,
+        color=discord.Color.blue(),
+    )
+    view = TicketPanelView(0)
+    msg = await target.send(embed=embed, view=view)
+    await asyncio.to_thread(
+        _save_ticket_panel,
+        interaction.guild.id, target.id, msg.id, label, emoji, description,
+    )
+    await interaction.response.send_message(f":white_check_mark: Ticket panel sent to {target.mention}", ephemeral=True)
+
+
+@bot.tree.command(name="ticket", description="Create a support ticket")
+async def slash_ticket(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    await interaction.response.defer(ephemeral=True)
+    settings = _get_ticket_settings(interaction.guild.id)
+    if not settings.get("category_id"):
+        await interaction.followup.send(":x: Ticket system is not set up. Ask an admin to run `/ticketsetup`.", ephemeral=True)
+        return
+    existing = await asyncio.to_thread(_get_ticket_by_user, interaction.guild.id, interaction.user.id)
+    if existing:
+        channel = interaction.guild.get_channel(int(existing["channel_id"]))
+        if channel:
+            await interaction.followup.send(f":x: You already have an open ticket: {channel.mention}", ephemeral=True)
+            return
+    channel = await _create_ticket_channel(interaction.guild, interaction.user, settings)
+    await asyncio.to_thread(_create_ticket, interaction.guild.id, channel.id, interaction.user.id)
+    await _send_ticket_welcome(channel, interaction.user, settings)
+    await interaction.followup.send(f":white_check_mark: Ticket created: {channel.mention}", ephemeral=True)
+
+
+@bot.tree.command(name="close", description="Close the current ticket (Support/Admin only)")
+async def slash_close(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
+    if not ticket:
+        await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+        return
+    settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
+    support_role_id = settings.get("support_role_id")
+    if not is_admin(interaction.user) and (not support_role_id or int(support_role_id) not in [r.id for r in interaction.user.roles]):
+        await interaction.response.send_message(":x: You don't have permission to close tickets.", ephemeral=True)
+        return
+    view = ConfirmCloseView()
+    await interaction.response.send_message("Are you sure you want to close this ticket?", view=view, ephemeral=True)
+
+
+@bot.tree.command(name="claim", description="Claim the current ticket (Support/Admin only)")
+async def slash_claim(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
+    if not ticket:
+        await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+        return
+    settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
+    support_role_id = settings.get("support_role_id")
+    if not is_admin(interaction.user) and (not support_role_id or int(support_role_id) not in [r.id for r in interaction.user.roles]):
+        await interaction.response.send_message(":x: You don't have permission to claim tickets.", ephemeral=True)
+        return
+    if ticket["claimed_by"]:
+        claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
+        name = claimer.mention if claimer else "someone"
+        await interaction.response.send_message(f":x: Already claimed by {name}.", ephemeral=True)
+        return
+    await asyncio.to_thread(_claim_ticket, interaction.channel_id, interaction.user.id)
+    await interaction.response.send_message(f":white_check_mark: Claimed by {interaction.user.mention}")
+
+
+@bot.tree.command(name="addtoticket", description="Add a user to this ticket (Support/Admin only)")
+@app_commands.describe(member="Member to add")
+async def slash_addtoticket(interaction: discord.Interaction, member: discord.Member):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
+    if not ticket:
+        await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+        return
+    settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
+    support_role_id = settings.get("support_role_id")
+    if not is_admin(interaction.user) and (not support_role_id or int(support_role_id) not in [r.id for r in interaction.user.roles]):
+        await interaction.response.send_message(":x: You don't have permission.", ephemeral=True)
+        return
+    await interaction.channel.set_permissions(member, view_channel=True, send_messages=True, read_message_history=True)
+    await interaction.response.send_message(f":white_check_mark: Added {member.mention} to the ticket.")
+
+
+@bot.tree.command(name="removefromticket", description="Remove a user from this ticket (Support/Admin only)")
+@app_commands.describe(member="Member to remove")
+async def slash_removefromticket(interaction: discord.Interaction, member: discord.Member):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
+    if not ticket:
+        await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+        return
+    settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
+    support_role_id = settings.get("support_role_id")
+    if not is_admin(interaction.user) and (not support_role_id or int(support_role_id) not in [r.id for r in interaction.user.roles]):
+        await interaction.response.send_message(":x: You don't have permission.", ephemeral=True)
+        return
+    if member.id == int(ticket["user_id"]):
+        await interaction.response.send_message(":x: You can't remove the ticket owner.", ephemeral=True)
+        return
+    await interaction.channel.set_permissions(member, overwrite=None)
+    await interaction.response.send_message(f":white_check_mark: Removed {member.mention} from the ticket.")
 
 
 @bot.tree.command(name="hey", description="Chat with Null or ask it to create files")
