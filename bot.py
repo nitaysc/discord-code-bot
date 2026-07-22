@@ -641,7 +641,9 @@ Rules:
 
 CODE_SYSTEM = textwrap.dedent("""\
 You are a coding assistant. Write code based on the user's request.
-Output ONLY the code in a code block with language tag. No explanations.
+If the request is vague or missing details, use sensible defaults and write the code anyway.
+Do NOT ask clarifying questions. Do NOT explain what details are needed.
+Output ONLY the code in a code block with language tag. No explanations outside the code block.
 Follow best practices and proper syntax.
 """)
 
@@ -716,8 +718,12 @@ def is_create_request(text: str) -> bool:
 
 def choose_filename(file_type: str | None, content: str, index: int = 0) -> str:
     ext = FILE_EXTENSIONS.get(file_type, ".txt") if file_type else ".txt"
-    first_line = content.strip().split("\n")[0] if content else "output"
-    safe = re.sub(r"[^\w\-]", "_", first_line[:25]) or "output"
+    first_line = content.strip().split("\n")[0] if content else ""
+    # If the first line looks like a filename (short, no spaces/special chars), use it
+    if first_line and len(first_line.split()) <= 3 and re.match(r"^[\w\-\. ]+$", first_line[:30]):
+        safe = re.sub(r"[^\w\-]", "_", first_line[:25]).strip("_") or "output"
+    else:
+        safe = "output"
     if index > 0:
         safe = f"{safe}_{index}"
     return f"{safe}{ext}"
@@ -879,9 +885,26 @@ def _looks_conversational(text: str) -> bool:
         "i'm unable to", "i can't", "i cannot", "i don't", "i do not",
         "i'm not", "i am not", "sorry", "unfortunately", "i'm not sure",
         "i don't know", "i'm afraid", "i'm happy to", "i'd be happy",
-        "i can help", "i can assist", "i'm here to",
+        "i can help", "i can assist", "i'm here to", "to create",
+        "please provide", "can you provide", "could you provide",
+        "specify", "need more", "need some", "need the following",
+        "what would you", "which would you", "do you want",
     ]
-    return any(lowered.startswith(p) for p in conversational_starts)
+    if any(lowered.startswith(p) for p in conversational_starts):
+        return True
+    clarification_phrases = [
+        "provide the following", "following details", "need more information",
+        "need more details", "need to know", "let me know", "tell me",
+        "can you clarify", "could you clarify", "what key", "which key",
+        "script name", "what do you want", "what should i",
+    ]
+    if any(p in lowered for p in clarification_phrases):
+        return True
+    # Responses that are mostly questions should be sent as text
+    question_count = text.count("?")
+    if question_count >= 1 and len(text.split("\n")) <= 5:
+        return True
+    return False
 
 
 async def handle_create_request(channel, prompt: str, reply_target=None):
