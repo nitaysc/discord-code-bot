@@ -620,6 +620,8 @@ async def slash_voice(interaction: discord.Interaction):
     await interaction.response.send_message(f":loud_sound: **Voice channels:**\n{info}")
 
 
+INVIDIOUS = "https://inv.nadeko.net"
+
 YTDL_OPTS = {
     "format": "bestaudio/best",
     "quiet": True,
@@ -627,6 +629,13 @@ YTDL_OPTS = {
     "noplaylist": True,
     "default_search": "ytsearch",
     "extract_flat": "in_playlist",
+    "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["android"]}},
+}
+
+YTDL_DL_OPTS = {
+    "format": "bestaudio/best",
+    "quiet": True,
+    "no_warnings": True,
 }
 
 YTDL_STREAM_OPTS = {
@@ -667,13 +676,18 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
     try:
         tmp = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
         tmp.close()
+
+        dl_url = song["url"]
+        if "youtube.com" in dl_url or "youtu.be" in dl_url:
+            vid_match = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', dl_url)
+            if vid_match:
+                dl_url = f"{INVIDIOUS}/watch?v={vid_match.group(1)}"
+
         ytdl_cmd = [
-            sys.executable, "-m", "yt_dlp", song["url"],
+            sys.executable, "-m", "yt_dlp", dl_url,
             "-f", "bestaudio/best",
             "-o", tmp.name,
             "-q", "--no-warnings",
-            "--default-search", "ytsearch",
-            "--extractor-args", "youtube:skip=webpage;player_client=android",
         ]
         result = subprocess.run(ytdl_cmd, capture_output=True, text=True)
         if result.returncode != 0:
