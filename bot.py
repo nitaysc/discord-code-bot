@@ -3231,11 +3231,29 @@ async def slash_voice(interaction: discord.Interaction):
     await interaction.response.send_message(f":loud_sound: **Voice channels:**\n{info}")
 
 
-@bot.tree.command(name="valorantsearch", description="Search Valorant players by name (no tag needed)")
-@app_commands.describe(name="Player name")
-async def slash_valorantsearch(interaction: discord.Interaction, name: str):
+def _valorant_tracker_url(name: str, tag: str) -> str:
+    return f"https://tracker.gg/valorant/profile/riot/{quote(name, safe='')}%23{quote(tag, safe='')}/overview"
+
+
+@bot.tree.command(name="valorantsearch", description="Search Valorant players by name, optionally with a tag")
+@app_commands.describe(name="Player name", tag="Optional tag to look up directly")
+async def slash_valorantsearch(interaction: discord.Interaction, name: str, tag: str = None):
     await interaction.response.defer()
-    profiles = await search_valorant_profiles(name)
+
+    # If a tag is provided, do a direct Henrik API lookup instead of web search
+    if tag:
+        tag = tag.lstrip("#")
+        account = await get_valorant_account(name, tag)
+        if not account:
+            await interaction.followup.send(
+                f":x: Couldn't find **{name}#{tag}**.\n"
+                f"Check their tracker profile: {_valorant_tracker_url(name, tag)}"
+            )
+            return
+        profiles = [(account.get("name", name), account.get("tag", tag))]
+    else:
+        profiles = await search_valorant_profiles(name)
+
     if not profiles:
         await interaction.followup.send(
             f":x: No public tracker profiles found for **{name}**.\n"
@@ -3314,10 +3332,6 @@ async def slash_valorant(interaction: discord.Interaction, name: str, tag: str):
         embed.add_field(name="Rank", value="Could not load ranked data.", inline=False)
 
     await interaction.followup.send(embed=embed)
-
-
-def _valorant_tracker_url(name: str, tag: str) -> str:
-    return f"https://tracker.gg/valorant/profile/riot/{quote(name, safe='')}%23{quote(tag, safe='')}/overview"
 
 
 @bot.tree.command(name="valorantmmr", description="Look up detailed Valorant MMR/rank info")
