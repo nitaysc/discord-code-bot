@@ -143,19 +143,30 @@ async def _search_brave(query: str, api_key: str, max_results: int = 5) -> list[
 
 
 async def web_search(query: str, max_results: int = 5) -> str:
-    results = await asyncio.to_thread(lambda: _search_duckduckgo(query, max_results))
+    results: list[dict] = []
+    used = ""
+
+    serp_key = os.getenv("SERPAPI_API_KEY")
+    if serp_key and not results:
+        results = await _search_serpapi(query, serp_key, max_results)
+        used = "SerpApi"
+
+    bing_key = os.getenv("BING_API_KEY")
+    if bing_key and not results:
+        results = await _search_bing(query, bing_key, max_results)
+        used = "Bing"
+
+    brave_key = os.getenv("BRAVE_API_KEY")
+    if brave_key and not results:
+        results = await _search_brave(query, brave_key, max_results)
+        used = "Brave"
+
     if not results:
-        serp_key = os.getenv("SERPAPI_API_KEY")
-        if serp_key:
-            results = await _search_serpapi(query, serp_key, max_results)
-    if not results:
-        bing_key = os.getenv("BING_API_KEY")
-        if bing_key:
-            results = await _search_bing(query, bing_key, max_results)
-    if not results:
-        brave_key = os.getenv("BRAVE_API_KEY")
-        if brave_key:
-            results = await _search_brave(query, brave_key, max_results)
+        results = await asyncio.to_thread(lambda: _search_duckduckgo(query, max_results))
+        used = "DuckDuckGo"
+
+    print(f"[SEARCH] backend={used or 'none'} query='{query}' results={len(results)}")
+
     if not results:
         return ""
     lines = []
@@ -780,33 +791,29 @@ async def answer_with_web_search_if_needed(
 ) -> str:
     needs_search, search_query = should_search(prompt)
     if needs_search:
-        search_results = await web_search(search_query, max_results=5)
-        if not search_results:
-            # Try a shorter keyword-based query
-            simple_query = " ".join(
-                w for w in search_query.split()
-                if w.lower() not in {"how", "to", "a", "the", "is", "are", "for", "of", "in", "on", "and", "or", "i", "you", "me", "tell", "something", "look", "online", "search", "find", "check"}
-            )
-            if simple_query and simple_query != search_query:
-                search_results = await web_search(simple_query, max_results=5)
+        search_results = ""
+        for query in [search_query, " ".join(
+            w for w in search_query.split()
+            if w.lower() not in {"how", "to", "a", "the", "is", "are", "for", "of", "in", "on", "and", "or", "i", "you", "me", "tell", "something", "look", "online", "search", "find", "check"}
+        )]:
+            if not query or query == search_results:
+                continue
+            search_results = await web_search(query, max_results=5)
+            if search_results and not search_results.startswith("Search error:"):
+                break
+            search_results = ""
         if search_results:
-            if search_results.startswith("Search error:"):
-                enhanced_prompt = f"{prompt}\n\n[Web search failed: {search_results}]"
-            else:
-                enhanced_prompt = (
-                    f"{prompt}\n\n[Web search results for '{search_query}':\n"
-                    f"{search_results}\n\n"
-                    f"Use the above search results to answer if helpful."
-                )
+            enhanced_prompt = (
+                f"{prompt}\n\n[Web search results for '{search_query}':\n"
+                f"{search_results}\n\n"
+                f"Use the above search results as the authoritative source."
+            )
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
-        enhanced_prompt = (
-            f"{prompt}\n\n[Web search failed: no current results found. "
-            "Free DuckDuckGo search may be blocked on this host. "
-            "If you know the answer from your training data, answer briefly. "
-            "If the answer requires current/real-time information, clearly say you don't have access right now "
-            "and suggest adding a search API key (SERPAPI_API_KEY, BING_API_KEY, or BRAVE_API_KEY).]"
+        return (
+            "I searched online but couldn't find current results right now. "
+            "Free web search may be blocked on this host. "
+            "For reliable real-time info, add a search API key: SERPAPI_API_KEY, BING_API_KEY, or BRAVE_API_KEY."
         )
-        return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
     return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
 
 
