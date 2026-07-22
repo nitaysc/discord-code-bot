@@ -662,7 +662,8 @@ CRITICAL API RULES — never violate these:
 - PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
 - PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
 - For interactive toggle/button scripts, always create a menu: menu.set_menu_name, menu.get_submenu, add_category, add_group, then add the command to the group with group:add_command(id).
-- For one-off actions (like instant brake, kill player, give money, etc.), prefer commandmgr.add_command (a button) instead of add_looped_command. Do NOT use INPUT/PAD/CONTROLS key natives unless you are 100% certain of the exact namespace, because wrong native names will crash the script.
+- For one-off actions (like instant brake, kill player, give money, etc.), ALWAYS use commandmgr.add_command (a button) instead of add_looped_command. A looped command for braking will freeze the car and prevent driving forward.
+- Do NOT use INPUT/PAD/CONTROLS key natives unless you are 100% certain of the exact namespace, because wrong native names will crash the script.
 
 Known YimMenuV2 Lua API:
 - natives.load_natives() — call once at the top if using GTA natives.
@@ -685,7 +686,7 @@ Filenaming:
 - Put `-- filename: short_snake_case_name.lua` as the very first line of the Lua code.
 - Example: `-- filename: instant_car_brake.lua`
 
-Example structure for a complete interactive toggle script:
+Example structure for a one-off action button:
 ```lua
 -- filename: example_script.lua
 natives.load_natives()
@@ -693,18 +694,20 @@ natives.load_natives()
 menu.set_menu_name("My Script")
 local submenu = menu.get_submenu("My Script")
 local category = submenu:add_category("Actions")
-local group = category:add_group("Toggles")
+local group = category:add_group("Buttons")
 
-local function tick_fn()
-    -- loop logic
-    script.yield(0)
+local function do_action()
+    local ped = PLAYER.PLAYER_PED_ID()
+    if ped ~= 0 and PED.IS_PED_IN_ANY_VEHICLE(ped, false) then
+        local vehicle = PED.GET_VEHICLE_PED_IS_IN(ped, false)
+        if vehicle ~= 0 then
+            -- action here
+        end
+    end
 end
 
-commandmgr.add_looped_command("my_toggle", "My Toggle", "Does something", tick_fn,
-    function() notify.success("My Toggle", "Enabled") end,
-    function() notify.success("My Toggle", "Disabled") end)
-
-group:add_command("my_toggle")
+commandmgr.add_command("my_action", "My Action", "Does something once", do_action)
+group:add_command("my_action")
 ```
 """)
 
