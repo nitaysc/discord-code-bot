@@ -656,25 +656,24 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
     music_current[guild.id] = song
 
     try:
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(song["url"], download=False)
-            if "entries" in info:
-                info = info["entries"][0]
-            title = info.get("title", "Unknown")
-            audio_url = info.get("url")
-            if not audio_url and info.get("formats"):
-                for fmt in info["formats"]:
-                    if fmt.get("acodec") != "none" and fmt.get("url"):
-                        audio_url = fmt["url"]
-                        break
+        audio_url = song.get("audio_url")
+        if not audio_url:
+            with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
+                info = ydl.extract_info(song["url"], download=False)
+                if "entries" in info:
+                    info = info["entries"][0]
+                audio_url = info.get("url")
+                if not audio_url and info.get("formats"):
+                    for fmt in info["formats"]:
+                        if fmt.get("acodec") != "none" and fmt.get("url"):
+                            audio_url = fmt["url"]
+                            break
             if not audio_url:
                 raise ValueError("No playable URL found")
-
+        title = song.get("title", "Unknown")
         song["title"] = title
 
-        source = await asyncio.to_thread(
-            discord.FFmpegOpusAudio.from_probe, audio_url, method="fallback"
-        )
+        source = discord.FFmpegOpusAudio.from_probe(audio_url, method="fallback")
         voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
             play_next(guild, voice_client), bot.loop
         ))
@@ -707,9 +706,15 @@ async def slash_play(interaction: discord.Interaction, query: str):
                 info = info["entries"][0]
             title = info.get("title", "Unknown")
             url = info.get("webpage_url", query)
+            audio_url = info.get("url")
+            if not audio_url and info.get("formats"):
+                for fmt in info["formats"]:
+                    if fmt.get("acodec") != "none" and fmt.get("url"):
+                        audio_url = fmt["url"]
+                        break
 
         queue = get_music_queue(interaction.guild_id)
-        song = {"title": title, "url": url, "requester": interaction.user.display_name}
+        song = {"title": title, "url": url, "audio_url": audio_url, "requester": interaction.user.display_name}
         queue.append(song)
 
         if not voice_client.is_playing() and interaction.guild_id not in music_current:
