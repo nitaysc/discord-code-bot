@@ -502,10 +502,10 @@ async def handle_level_up(member: discord.Member, channel: discord.TextChannel, 
                 roles_added.append(role.mention)
             except Exception:
                 pass
-    enabled = _get_setting(member.guild.id, "levelup_enabled", "true").lower()
+    enabled = (await asyncio.to_thread(_get_setting, member.guild.id, "levelup_enabled", "true")).lower()
     if enabled != "true":
         return
-    levelup_channel_id = _get_setting(member.guild.id, "levelup_channel")
+    levelup_channel_id = await asyncio.to_thread(_get_setting, member.guild.id, "levelup_channel")
     target_channel = channel
     if levelup_channel_id:
         ch = member.guild.get_channel(int(levelup_channel_id))
@@ -1220,11 +1220,12 @@ class CodeBot(commands.Bot):
                         if member.bot or member.voice.mute or member.voice.deaf:
                             continue
                         role_ids = [r.id for r in member.roles]
-                        if _is_blacklisted(guild.id, vc.id, role_ids):
+                        blacklisted = await asyncio.to_thread(_is_blacklisted, guild.id, vc.id, role_ids)
+                        if blacklisted:
                             continue
-                        mult = _get_multiplier(guild.id, vc.id, role_ids)
+                        mult = await asyncio.to_thread(_get_multiplier, guild.id, vc.id, role_ids)
                         amount = int(10 * mult)
-                        result = add_voice_xp(guild.id, member.id, amount)
+                        result = await asyncio.to_thread(add_voice_xp, guild.id, member.id, amount)
                         if result:
                             xp, level, leveled_up = result
                             if leveled_up:
@@ -1340,7 +1341,7 @@ async def slash_rank(interaction: discord.Interaction, member: discord.Member = 
     await interaction.response.defer()
     target = member or interaction.user
     try:
-        data = get_rank(interaction.guild.id, target.id)
+        data = await asyncio.to_thread(get_rank, interaction.guild.id, target.id)
     except Exception as e:
         await interaction.followup.send(f":x: Database error: {e}", ephemeral=True)
         return
@@ -1374,7 +1375,7 @@ async def slash_leaderboard(interaction: discord.Interaction):
         return
     await interaction.response.defer()
     try:
-        rows = get_leaderboard(interaction.guild.id, 10)
+        rows = await asyncio.to_thread(get_leaderboard, interaction.guild.id, 10)
     except Exception as e:
         await interaction.followup.send(f":x: Database error: {e}", ephemeral=True)
         return
