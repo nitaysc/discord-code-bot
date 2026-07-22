@@ -35,6 +35,9 @@ if MODEL.startswith("AI_MODEL="):
 if not TOKEN or not AI_KEY:
     raise RuntimeError("Missing DISCORD_TOKEN or AI API key in .env file")
 
+print(f"[STARTUP] AI provider: {MODEL}")
+print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
+
 if GITHUB_TOKEN:
     client = OpenAI(
         base_url="https://models.inference.ai.azure.com",
