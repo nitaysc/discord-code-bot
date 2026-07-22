@@ -618,19 +618,31 @@ async def slash_voice(interaction: discord.Interaction):
 
 RADIO_STATIONS = {
     "lofi": "https://stream.radioparadise.com/mellow-128",
-    "jazz": "https://jazzradio.ice.infomaniak.ch/jazzradio-high.mp3",
     "rock": "https://stream.radioparadise.com/rock-128",
-    "chill": "https://stream.radioparadise.com/mellow-128",
     "pop": "https://stream.radioparadise.com/main-128",
     "edm": "https://stream.radioparadise.com/dance-128",
     "classical": "https://stream.radioparadise.com/classical-128",
+    "chill": "https://stream.radioparadise.com/mellow-128",
     "hiphop": "https://stream.radioparadise.com/hiphop-128",
+    "jazz": "https://jazzradio.ice.infomaniak.ch/jazzradio-high.mp3",
+    "blues": "https://stream.radioparadise.com/blues-128",
+    "country": "https://stream.radioparadise.com/country-128",
+    "metal": "https://stream.radioparadise.com/metal-128",
+    "reggae": "https://stream.radioparadise.com/reggae-128",
+    "indie": "https://stream.radioparadise.com/indie-128",
+    "ambient": "https://stream.radioparadise.com/ambient-128",
+    "world": "https://stream.radioparadise.com/world-128",
+    "80s": "https://stream.radioparadise.com/80s-128",
+    "90s": "https://stream.radioparadise.com/90s-128",
+    "anime": "https://listen.moe/stream",
 }
 
-PIPED_API = "https://api.piped.private.coffee"
+PIPED_INSTANCES = [
+    "https://api.piped.private.coffee",
+]
 
-@bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm, classical, hiphop)")
-@app_commands.describe(station="Station name or stream URL")
+@bot.tree.command(name="radio", description="Play radio: lofi rock pop edm classical chill hiphop jazz + more")
+@app_commands.describe(station="Station name or URL")
 async def slash_radio(interaction: discord.Interaction, station: str):
     if not interaction.user.voice:
         await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
@@ -638,9 +650,10 @@ async def slash_radio(interaction: discord.Interaction, station: str):
     await interaction.response.defer()
     voice = interaction.user.voice.channel
     voice_client = interaction.guild.voice_client
-    url = RADIO_STATIONS.get(station.lower(), station)
-    if not url.startswith("http"):
-        await interaction.followup.send(":x: Try: lofi, jazz, rock, chill, pop, edm, classical, hiphop, or a direct stream URL.")
+    url = RADIO_STATIONS.get(station.lower())
+    if not url:
+        stations = ", ".join(RADIO_STATIONS.keys())
+        await interaction.followup.send(f":x: Unknown. Try: {stations}")
         return
     if not voice_client:
         voice_client = await voice.connect()
@@ -652,50 +665,6 @@ async def slash_radio(interaction: discord.Interaction, station: str):
         )
         voice_client.play(source)
         await interaction.followup.send(f":radio: Playing **{station}**")
-    except Exception as e:
-        await interaction.followup.send(f":x: Failed: {e}")
-
-
-@bot.tree.command(name="play", description="Play a song via Piped (YouTube proxy)")
-@app_commands.describe(query="Song name to search")
-async def slash_play(interaction: discord.Interaction, query: str):
-    if not interaction.user.voice:
-        await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
-        return
-    await interaction.response.defer()
-    voice = interaction.user.voice.channel
-    voice_client = interaction.guild.voice_client
-    try:
-        import urllib.request, json as jmod
-        search_url = f"{PIPED_API}/search?q={urllib.parse.quote(query)}&filter=music_songs"
-        req = urllib.request.Request(search_url, headers={"User-Agent": "DiscordBot/1.0"})
-        data = jmod.loads(urllib.request.urlopen(req, timeout=10).read())
-        items = data.get("items", [])
-        if not items:
-            await interaction.followup.send(":x: No results.")
-            return
-        video_id = items[0].get("url", "").replace("/watch?v=", "")
-        title = items[0].get("title", "Unknown")
-        stream_url = f"{PIPED_API}/streams/{video_id}"
-        req2 = urllib.request.Request(stream_url, headers={"User-Agent": "DiscordBot/1.0"})
-        stream_data = jmod.loads(urllib.request.urlopen(req2, timeout=10).read())
-        audio_url = None
-        for a in stream_data.get("audioStreams", []):
-            if a.get("format") == "WEBMA_OPUS":
-                audio_url = a["url"]
-                break
-        if not audio_url:
-            await interaction.followup.send(":x: No audio stream found.")
-            return
-        if not voice_client:
-            voice_client = await voice.connect()
-        elif voice_client.channel != voice:
-            await voice_client.move_to(voice)
-        source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(audio_url, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
-        )
-        voice_client.play(source)
-        await interaction.followup.send(f":musical_note: **{title}**")
     except Exception as e:
         await interaction.followup.send(f":x: Failed: {e}")
 
