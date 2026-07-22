@@ -963,7 +963,10 @@ class TicketControlView(discord.ui.View):
         await interaction.response.defer()
         ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
         if not ticket:
-            await interaction.followup.send(":x: This is not a ticket channel.", ephemeral=True)
+            try:
+                await interaction.followup.send(":x: This is not a ticket channel.", ephemeral=True)
+            except Exception:
+                pass
             return
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
@@ -978,7 +981,10 @@ class TicketControlView(discord.ui.View):
         await interaction.response.defer(ephemeral=True)
         ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
         if not ticket:
-            await interaction.followup.send(":x: This is not a ticket channel.", ephemeral=True)
+            try:
+                await interaction.followup.send(":x: This is not a ticket channel.", ephemeral=True)
+            except Exception:
+                pass
             return
         view = ConfirmCloseView()
         await interaction.followup.send("Are you sure you want to close this ticket?", view=view, ephemeral=True)
