@@ -292,35 +292,35 @@ class _PostgresConnection:
 
 SCHEMA_SCRIPT = """
 CREATE TABLE IF NOT EXISTS levels (
-    guild_id INTEGER NOT NULL,
-    user_id INTEGER NOT NULL,
-    xp INTEGER DEFAULT 0,
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    xp BIGINT DEFAULT 0,
     messages INTEGER DEFAULT 0,
     voice_minutes INTEGER DEFAULT 0,
     last_xp REAL DEFAULT 0,
     PRIMARY KEY (guild_id, user_id)
 );
 CREATE TABLE IF NOT EXISTS level_settings (
-    guild_id INTEGER NOT NULL,
+    guild_id BIGINT NOT NULL,
     key TEXT NOT NULL,
     value TEXT,
     PRIMARY KEY (guild_id, key)
 );
 CREATE TABLE IF NOT EXISTS role_rewards (
-    guild_id INTEGER NOT NULL,
+    guild_id BIGINT NOT NULL,
     level INTEGER NOT NULL,
-    role_id INTEGER NOT NULL,
+    role_id BIGINT NOT NULL,
     PRIMARY KEY (guild_id, level)
 );
 CREATE TABLE IF NOT EXISTS xp_blacklist (
-    guild_id INTEGER NOT NULL,
-    target_id INTEGER NOT NULL,
+    guild_id BIGINT NOT NULL,
+    target_id BIGINT NOT NULL,
     target_type TEXT NOT NULL,
     PRIMARY KEY (guild_id, target_id, target_type)
 );
 CREATE TABLE IF NOT EXISTS xp_multipliers (
-    guild_id INTEGER NOT NULL,
-    target_id INTEGER NOT NULL,
+    guild_id BIGINT NOT NULL,
+    target_id BIGINT NOT NULL,
     target_type TEXT NOT NULL,
     multiplier REAL NOT NULL,
     PRIMARY KEY (guild_id, target_id, target_type)
