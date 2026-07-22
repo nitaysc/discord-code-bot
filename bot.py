@@ -665,25 +665,26 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
     music_current[guild.id] = song
 
     try:
+        tmp = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
+        tmp.close()
         ytdl_cmd = [
             sys.executable, "-m", "yt_dlp", song["url"],
             "-f", "bestaudio/best",
-            "-o", "-",
+            "-o", tmp.name,
             "-q", "--no-warnings",
             "--default-search", "ytsearch",
         ]
-        proc = subprocess.Popen(ytdl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        subprocess.run(ytdl_cmd, check=True, stderr=subprocess.DEVNULL)
         source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(
-                proc.stdout,
-                pipe=True,
-                before_options="-nostdin",
-                options="-vn",
-            )
+            discord.FFmpegPCMAudio(tmp.name, options="-vn")
         )
-        voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
-            play_next(guild, voice_client), bot.loop
-        ))
+        def after_play(error):
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+            asyncio.run_coroutine_threadsafe(play_next(guild, voice_client), bot.loop)
+        voice_client.play(source, after=after_play)
     except Exception as e:
         print(f"[MUSIC] Error: {e}")
         await asyncio.sleep(0.5)
