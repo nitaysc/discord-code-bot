@@ -16,16 +16,24 @@ from duckduckgo_search import DDGS
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+AI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 
-if not TOKEN or not GEMINI_KEY:
-    raise RuntimeError("Missing DISCORD_TOKEN or GEMINI_API_KEY in .env file")
+if not TOKEN or not AI_KEY:
+    raise RuntimeError("Missing DISCORD_TOKEN or OPENAI_API_KEY in .env file")
 
-client = OpenAI(
-    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-    api_key=GEMINI_KEY,
-)
+if os.getenv("OPENAI_API_KEY"):
+    client = OpenAI(api_key=AI_KEY)
+elif os.getenv("GROQ_API_KEY"):
+    client = OpenAI(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=AI_KEY,
+    )
+else:
+    client = OpenAI(
+        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        api_key=AI_KEY,
+    )
 
 
 async def web_search(query: str, max_results: int = 5) -> str:
@@ -127,6 +135,7 @@ MY CAPABILITIES:
 - Kick/vkick/say/clear: admin commands
 - Normal chat, coding help, answering questions
 - See images: attach an image and ask about it
+- Voice features coming soon (speech-to-text and text-to-speech)
 - I remember the last 50 messages in each channel
 
 I am a real Discord bot with real features. Never say "I can't" without checking my actual capabilities above.
