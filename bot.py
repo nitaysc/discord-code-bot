@@ -653,42 +653,35 @@ Write Lua scripts that work with the YimMenuV2 mod menu.
 Do NOT ask clarifying questions. Use sensible defaults and write complete, working code.
 Output ONLY the code in a code block with `lua` language tag. No explanations outside the code block.
 
-Known YimMenuV2 Lua API (use these patterns):
-- natives.load_natives() — load GTA native functions at the top of the script.
-- menu.set_menu_name("My Menu") — set the script menu name.
-- local submenu = menu.get_submenu("My Menu") — get/create the submenu.
-- local category = submenu:add_category("Category") — add a category.
-- local group = category:add_group("Group") — add a group.
-- group:add_command("command_id") — add a registered command to the UI group.
-- group:add_button("id", "Label", "Description", function() ... end) — add a button.
-- commandmgr.add_command("id", "Label", "Description", function() ... end) — register a command.
-- commandmgr.add_looped_command("id", "Label", "Description", tick_fn, on_enable, on_disable) — register a toggleable looped command.
-- commandmgr.add_list_command("id", "Label", "Description", {{1,"Option"}, ...}, default_index, callback) — register a list option.
-- script.run_in_callback(function() ... end) — run async/callback code.
-- script.yield(ms) — wait/sleep (1000 ms = 1 second). Always yield in loops.
-- log.info("message") — log to console.
-- notify.success("Title", "Message"), notify.info(...), notify.error(...), notify.warning(...) — notifications.
-- stats.get_int("STAT_NAME"), stats.set_int("STAT_NAME", value), stats.set_bool("STAT_NAME", value) — stats.
-- util.joaat("MODEL_NAME") — joaat hash of a model name.
-- PLAYER.PLAYER_PED_ID(), PLAYER.PLAYER_ID() — get player ped/player id.
-- ENTITY.GET_ENTITY_COORDS(ent, true), ENTITY.GET_ENTITY_MODEL(ent), ENTITY.SET_ENTITY_HEALTH(ent, health, attacker, unk)
-- ENTITY.SET_ENTITY_ROTATION(ent, pitch, roll, yaw, unk, bool)
-- VEHICLE.CREATE_VEHICLE(hash, x, y, z, heading, networked, bool, bool)
-- VEHICLE.SET_VEHICLE_ENGINE_ON(veh, true, true, false)
-- PED.CREATE_PED(type, hash, x, y, z, heading, networked, bool)
-- PED.SET_PED_TO_RAGDOLL(ped, time1, time2, type, bool, bool, bool)
-- PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn)
-- STREAMING.REQUEST_MODEL(hash, false), STREAMING.HAS_MODEL_LOADED(hash), STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
-- entities.get_all_peds_as_handles() — get all ped handles.
-- Entity(handle) with :is_valid(), :get_velocity(), :set_velocity(Vector3(x,y,z))
-- Vector3(x, y, z)
-- FIRE.ADD_EXPLOSION(x, y, z, type, damage, audible, invisible, shake, nodamage)
+CRITICAL API RULES — never violate these:
+- natives.load_natives() takes NO arguments. Never write natives.load_natives(number).
+- commandmgr.add_looped_command takes 6 arguments: id, label, description, tick_function, on_enable_function, on_disable_function.
+- Handles returned by GET_VEHICLE_PED_IS_IN or PLAYER_PED_ID can be 0. Check with `if handle ~= 0 then`, never `if handle then`.
+- ENTITY.SET_ENTITY_VELOCITY takes separate x, y, z numbers: SET_ENTITY_VELOCITY(ent, x, y, z). Never pass a Vector3 object.
+- VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, 0) is the correct way to stop a vehicle instantly.
+- PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
+- PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
 
-Rules:
-- Use natives.load_natives() when using GTA native functions (PLAYER, ENTITY, VEHICLE, PED, STREAMING, FIRE, etc.).
-- Request and wait for models with STREAMING.REQUEST_MODEL + STREAMING.HAS_MODEL_LOADED loop + script.yield(0).
-- Always call script.yield() inside while loops.
-- Prefer commandmgr + menu groups for interactive scripts.
+Known YimMenuV2 Lua API:
+- natives.load_natives() — call once at the top if using GTA natives.
+- menu.set_menu_name("My Menu") / menu.get_submenu("My Menu") / submenu:add_category / category:add_group / group:add_command / group:add_button
+- commandmgr.add_command(id, label, desc, callback)
+- commandmgr.add_looped_command(id, label, desc, tick_fn, on_enable_fn, on_disable_fn)
+- commandmgr.add_list_command(id, label, desc, {{1,"Option"}, ...}, default_index, callback)
+- script.run_in_callback(function() ... end) / script.yield(ms)
+- log.info / notify.success / notify.info / notify.error / notify.warning
+- stats.get_int / stats.set_int / stats.set_bool
+- util.joaat("MODEL_NAME")
+- PLAYER.PLAYER_PED_ID / PLAYER.PLAYER_ID
+- ENTITY.GET_ENTITY_COORDS(ent, alive) / GET_ENTITY_MODEL / SET_ENTITY_HEALTH / SET_ENTITY_VELOCITY(ent, x, y, z)
+- VEHICLE.CREATE_VEHICLE / SET_VEHICLE_ENGINE_ON / SET_VEHICLE_FORWARD_SPEED
+- PED.CREATE_PED / SET_PED_TO_RAGDOLL / IS_PED_IN_ANY_VEHICLE / GET_VEHICLE_PED_IS_IN
+- STREAMING.REQUEST_MODEL / HAS_MODEL_LOADED / SET_MODEL_AS_NO_LONGER_NEEDED
+- entities.get_all_peds_as_handles / Entity(handle) / Vector3(x,y,z) / FIRE.ADD_EXPLOSION
+
+Filenaming:
+- Put `-- filename: short_snake_case_name.lua` as the very first line of the Lua code.
+- Example: `-- filename: instant_car_brake.lua`
 """)
 
 
@@ -762,7 +755,18 @@ def is_create_request(text: str) -> bool:
 
 def choose_filename(file_type: str | None, content: str, index: int = 0) -> str:
     ext = FILE_EXTENSIONS.get(file_type, ".txt") if file_type else ".txt"
-    first_line = content.strip().split("\n")[0] if content else ""
+    lines = content.strip().split("\n") if content else []
+    # Look for an explicit filename comment in the first 5 lines
+    for line in lines[:5]:
+        m = re.match(r"^\s*--\s*filename\s*:\s*(\S+)(\.\w+)?\s*$", line, re.IGNORECASE)
+        if m:
+            name = m.group(1)
+            file_ext = m.group(2) or ext
+            safe = re.sub(r"[^\w\-]", "_", name).strip("_") or "output"
+            if index > 0:
+                safe = f"{safe}_{index}"
+            return f"{safe}{file_ext}"
+    first_line = lines[0] if lines else ""
     # If the first line looks like a filename (short, no spaces/special chars), use it
     if first_line and len(first_line.split()) <= 3 and re.match(r"^[\w\-\. ]+$", first_line[:30]):
         safe = re.sub(r"[^\w\-]", "_", first_line[:25]).strip("_") or "output"
@@ -773,14 +777,27 @@ def choose_filename(file_type: str | None, content: str, index: int = 0) -> str:
     return f"{safe}{ext}"
 
 
+def strip_filename_comment(content: str) -> str:
+    lines = content.split("\n")
+    new_lines = []
+    skipped = False
+    for line in lines:
+        if not skipped and re.match(r"^\s*--\s*filename\s*:\s*\S+\s*$", line, re.IGNORECASE):
+            skipped = True
+            continue
+        new_lines.append(line)
+    return "\n".join(new_lines)
+
+
 async def send_files(channel, code_blocks, lang_hint=None):
     for i, (block_lang, code) in enumerate(code_blocks):
         final_type = block_lang or lang_hint
         filename = choose_filename(final_type, code, i)
+        clean_code = strip_filename_comment(code)
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
         )
-        tmp.write(code)
+        tmp.write(clean_code)
         tmp.close()
         await channel.send(
             f":package: `{filename}`",
@@ -791,10 +808,11 @@ async def send_files(channel, code_blocks, lang_hint=None):
 
 async def send_raw_file(channel, content: str, file_type: str | None):
     filename = choose_filename(file_type, content)
+    clean_content = strip_filename_comment(content)
     tmp = tempfile.NamedTemporaryFile(
         mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
     )
-    tmp.write(content)
+    tmp.write(clean_content)
     tmp.close()
     await channel.send(
         f":package: `{filename}`",
