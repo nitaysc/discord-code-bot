@@ -277,11 +277,40 @@ class _PostgresConnection:
 
     def executescript(self, script):
         cur = self._conn.cursor()
-        for statement in script.split(";"):
-            statement = statement.strip()
+        statements = self._split_statements(script)
+        for statement in statements:
             if statement:
                 cur.execute(statement)
         cur.close()
+
+    @staticmethod
+    def _split_statements(script: str) -> list[str]:
+        statements = []
+        current = []
+        in_dollar = False
+        i = 0
+        while i < len(script):
+            if not in_dollar and script.startswith("$$", i):
+                in_dollar = True
+                current.append("$$")
+                i += 2
+                continue
+            if in_dollar and script.startswith("$$", i):
+                in_dollar = False
+                current.append("$$")
+                i += 2
+                continue
+            if script[i] == ";" and not in_dollar:
+                statements.append("".join(current).strip())
+                current = []
+                i += 1
+                continue
+            current.append(script[i])
+            i += 1
+        remainder = "".join(current).strip()
+        if remainder:
+            statements.append(remainder)
+        return statements
 
     def commit(self):
         self._conn.commit()
