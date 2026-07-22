@@ -1317,11 +1317,16 @@ async def on_message(message):
 
     if message.guild:
         role_ids = [r.id for r in message.author.roles]
-        result = add_message_xp(message.guild.id, message.author.id, message.channel.id, role_ids)
-        if result:
-            xp, level, leveled_up = result
-            if leveled_up:
-                await handle_level_up(message.author, message.channel, level)
+        try:
+            result = await asyncio.to_thread(
+                add_message_xp, message.guild.id, message.author.id, message.channel.id, role_ids
+            )
+            if result:
+                xp, level, leveled_up = result
+                if leveled_up:
+                    await handle_level_up(message.author, message.channel, level)
+        except Exception as e:
+            print(f"XP error: {e}")
 
     await bot.process_commands(message)
 
