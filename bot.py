@@ -928,7 +928,7 @@ class TicketControlView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="", custom_id="ticket_claim")
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="👤", custom_id="ticket_claim")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
         ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
         if not ticket:
@@ -942,7 +942,7 @@ class TicketControlView(discord.ui.View):
         await asyncio.to_thread(_claim_ticket, interaction.channel_id, interaction.user.id)
         await interaction.response.send_message(f":white_check_mark: Claimed by {interaction.user.mention}")
 
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="", custom_id="ticket_close")
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket_close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
         if not ticket:
@@ -1003,7 +1003,7 @@ class TicketPanelView(discord.ui.View):
         super().__init__(timeout=None)
         self.panel_id = panel_id
 
-    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.green, emoji="", custom_id="ticket_panel_create")
+    @discord.ui.button(label="Create Ticket", style=discord.ButtonStyle.green, emoji="🎫", custom_id="ticket_panel_create")
     async def create_ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
         settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
@@ -2110,7 +2110,7 @@ async def slash_ticketsetup(
 async def slash_ticketpanel(
     interaction: discord.Interaction,
     label: str = "Create Ticket",
-    emoji: str = "",
+    emoji: str = "🎫",
     description: str = "Click the button below to open a support ticket.",
     channel: discord.TextChannel = None,
 ):
