@@ -4091,7 +4091,7 @@ async def slash_tv_setup(interaction: discord.Interaction, channel: discord.Voic
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO temp_voice_creators (guild_id, channel_id, name_format, user_limit, privacy_mode) VALUES (?, ?, ?, 0, 'public')",
+            "INSERT INTO temp_voice_creators (guild_id, channel_id) VALUES (?, ?)",
             (interaction.guild.id, channel.id),
         )
         conn.commit()
