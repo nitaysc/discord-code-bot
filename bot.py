@@ -662,7 +662,7 @@ CRITICAL API RULES — never violate these:
 - PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
 - PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
 - For interactive toggle/button scripts, always create a menu: menu.set_menu_name, menu.get_submenu, add_category, add_group, then add the command to the group with group:add_command(id).
-- For one-off actions (like instant brake, kill player, give money, etc.), ALWAYS use group:add_button(label, desc, callback) instead of add_looped_command. A looped command for braking will freeze the car and prevent driving forward.
+- For one-off actions (like instant brake, kill player, give money, etc.), ALWAYS use group:add_button(id, label, description, callback) instead of add_looped_command. A looped command for braking will freeze the car and prevent driving forward. The id is a short snake_case identifier, label is the display text, description is the tooltip, and callback is the function to run.
 - Do NOT use INPUT/PAD/CONTROLS key natives unless you are 100% certain of the exact namespace, because wrong native names will crash the script.
 - Use PED.IS_PED_IN_ANY_VEHICLE(ped, true) to check if the player is in a vehicle.
 
@@ -708,7 +708,7 @@ local function do_action()
     end
 end
 
-group:add_button("My Action", "Does something once", do_action)
+group:add_button("my_action", "My Action", "Does something once", do_action)
 ```
 """)
 
