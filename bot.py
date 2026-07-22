@@ -18,13 +18,19 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 CLOUDFLARE_KEY = os.getenv("CLOUDFLARE_API_KEY")
 CLOUDFLARE_ACCOUNT = os.getenv("CLOUDFLARE_ACCOUNT_ID")
-AI_KEY = CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("AI_MODEL", "@cf/meta/llama-3.2-11b-vision-instruct")
+HF_TOKEN = os.getenv("HF_TOKEN")
+AI_KEY = HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("AI_MODEL", "meta-llama/Llama-3.2-11B-Vision-Instruct")
 
 if not TOKEN or not AI_KEY:
     raise RuntimeError("Missing DISCORD_TOKEN or AI API key in .env file")
 
-if CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
+if HF_TOKEN:
+    client = OpenAI(
+        base_url="https://router.huggingface.co/v1",
+        api_key=HF_TOKEN,
+    )
+elif CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
     client = OpenAI(
         base_url=f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT}/ai/v1/",
         api_key=CLOUDFLARE_KEY,
