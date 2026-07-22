@@ -90,11 +90,12 @@ async def web_search(query: str, max_results: int = 5) -> str:
 SEARCH_TRIGGER_WORDS = {
     "latest", "current", "today", "now", "news", "weather", "price", "prices",
     "score", "scores", "update", "recent", "happened", "happening", "live",
-    "stock", "crypto", "bitcoin", "election", "who won",
-    "release date", "when did", "how old is", "age of", "net worth",
+    "stock", "crypto", "bitcoin", "election", "who won", "who won", "winner", "winners", "results",
+    "release date", "when did", "how old is", "age of", "net worth", "did happen", "has happened",
     "look online", "look up", "search for", "find online", "check online",
-    "what is", "how to", "where is",
-    "2025", "2026", "2027",
+    "what is", "how to", "where is", "who is", "who was",
+    "world cup", "olympics", "super bowl", "champions league", "eurovision",
+    "2025", "2026", "2027", "yesterday", "tomorrow", "this week", "last week",
 }
 
 
@@ -530,12 +531,16 @@ I am a real Discord bot with real features. Never say "I can't" without checking
 
 CHAT_SYSTEM = textwrap.dedent(f"""\
 You are Null, a friendly and capable Discord bot. You are chill, concise, and cool.
+Today's date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.
 {CHAT_CAPABILITIES}
 
 Rules:
 - When someone asks if you can do something, check your capabilities FIRST before saying no.
 - Guide users to use the right /command for what they want.
 - For code/file requests, output the content and the system sends it as a downloadable file.
+- For ANY question about current events, recent news, sports results, today's date, future dates, or anything time-sensitive: you MUST rely on the web search results provided in the prompt, NOT your training data. Your training data has a cutoff and may be outdated.
+- If web search results are provided, use them as the authoritative source. Do not contradict them with your built-in knowledge.
+- If no search results are provided and the question is time-sensitive, say you don't have current info rather than guessing.
 - Keep responses short and natural. Don't list all features unless asked.
 - Respond in the same language the user speaks.
 """)
