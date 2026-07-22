@@ -16,7 +16,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from openai import OpenAI
 import wavelink
-from duckduckgo_search import DDGS
+from ddgs import DDGS
 from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
