@@ -232,49 +232,111 @@ CREATE_KEYWORDS = [
 MAX_HISTORY = 50
 message_history: dict[int, deque[dict]] = {}
 
+DATABASE_URL = os.getenv("DATABASE_URL")
 DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "bot.db"))
+
+USE_POSTGRES = bool(DATABASE_URL)
+
+if USE_POSTGRES:
+    try:
+        import psycopg2
+    except ImportError:
+        psycopg2 = None
+else:
+    psycopg2 = None
+
+
+class _PostgresCursor:
+    def __init__(self, cur):
+        self._cur = cur
+
+    def execute(self, query, params=()):
+        return self._cur.execute(query.replace("?", "%s"), params)
+
+    def executemany(self, query, params_list):
+        return self._cur.executemany(query.replace("?", "%s"), params_list)
+
+    def fetchone(self):
+        return self._cur.fetchone()
+
+    def fetchall(self):
+        return self._cur.fetchall()
+
+
+class _PostgresConnection:
+    def __init__(self, conn):
+        self._conn = conn
+
+    def cursor(self):
+        return _PostgresCursor(self._conn.cursor())
+
+    def execute(self, query, params=()):
+        cur = self._conn.cursor()
+        cur.execute(query.replace("?", "%s"), params)
+        return _PostgresCursor(cur)
+
+    def executescript(self, script):
+        cur = self._conn.cursor()
+        for statement in script.split(";"):
+            statement = statement.strip()
+            if statement:
+                cur.execute(statement)
+        cur.close()
+
+    def commit(self):
+        self._conn.commit()
+
+    def close(self):
+        self._conn.close()
+
+
+SCHEMA_SCRIPT = """
+CREATE TABLE IF NOT EXISTS levels (
+    guild_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    xp INTEGER DEFAULT 0,
+    messages INTEGER DEFAULT 0,
+    voice_minutes INTEGER DEFAULT 0,
+    last_xp REAL DEFAULT 0,
+    PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS level_settings (
+    guild_id INTEGER NOT NULL,
+    key TEXT NOT NULL,
+    value TEXT,
+    PRIMARY KEY (guild_id, key)
+);
+CREATE TABLE IF NOT EXISTS role_rewards (
+    guild_id INTEGER NOT NULL,
+    level INTEGER NOT NULL,
+    role_id INTEGER NOT NULL,
+    PRIMARY KEY (guild_id, level)
+);
+CREATE TABLE IF NOT EXISTS xp_blacklist (
+    guild_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    PRIMARY KEY (guild_id, target_id, target_type)
+);
+CREATE TABLE IF NOT EXISTS xp_multipliers (
+    guild_id INTEGER NOT NULL,
+    target_id INTEGER NOT NULL,
+    target_type TEXT NOT NULL,
+    multiplier REAL NOT NULL,
+    PRIMARY KEY (guild_id, target_id, target_type)
+);
+"""
 
 
 def get_db():
+    if USE_POSTGRES and psycopg2:
+        conn = psycopg2.connect(DATABASE_URL)
+        wrapper = _PostgresConnection(conn)
+        wrapper.executescript(SCHEMA_SCRIPT)
+        wrapper.commit()
+        return wrapper
     conn = sqlite3.connect(DB_PATH)
-    conn.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS levels (
-            guild_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            xp INTEGER DEFAULT 0,
-            messages INTEGER DEFAULT 0,
-            voice_minutes INTEGER DEFAULT 0,
-            last_xp REAL DEFAULT 0,
-            PRIMARY KEY (guild_id, user_id)
-        );
-        CREATE TABLE IF NOT EXISTS level_settings (
-            guild_id INTEGER NOT NULL,
-            key TEXT NOT NULL,
-            value TEXT,
-            PRIMARY KEY (guild_id, key)
-        );
-        CREATE TABLE IF NOT EXISTS role_rewards (
-            guild_id INTEGER NOT NULL,
-            level INTEGER NOT NULL,
-            role_id INTEGER NOT NULL,
-            PRIMARY KEY (guild_id, level)
-        );
-        CREATE TABLE IF NOT EXISTS xp_blacklist (
-            guild_id INTEGER NOT NULL,
-            target_id INTEGER NOT NULL,
-            target_type TEXT NOT NULL,
-            PRIMARY KEY (guild_id, target_id, target_type)
-        );
-        CREATE TABLE IF NOT EXISTS xp_multipliers (
-            guild_id INTEGER NOT NULL,
-            target_id INTEGER NOT NULL,
-            target_type TEXT NOT NULL,
-            multiplier REAL NOT NULL,
-            PRIMARY KEY (guild_id, target_id, target_type)
-        );
-        """
-    )
+    conn.executescript(SCHEMA_SCRIPT)
     conn.commit()
     return conn
 
