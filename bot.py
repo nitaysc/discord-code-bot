@@ -389,8 +389,14 @@ async def on_message(message):
                 if is_create_request(content):
                     await handle_create_request(message.channel, content, reply_target=message)
                 else:
+                    context_extra = ""
+                    content_lower = content.lower()
+                    if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk"]):
+                        context_extra = f"\n\n[Server voice info: {get_voice_info(message.guild)}]"
+
                     history = get_history(channel_id)
-                    answer = await call_ai(CHAT_SYSTEM, content, history, temperature=0.7,
+                    prompt = content + context_extra
+                    answer = await call_ai(CHAT_SYSTEM, prompt, history, temperature=0.7,
                                           image_urls=image_urls if image_urls else None)
                     add_to_history(channel_id, "assistant", answer)
                     code_blocks = extract_code_blocks(answer)
@@ -576,6 +582,27 @@ async def slash_read(interaction: discord.Interaction, channel: discord.TextChan
         await interaction.followup.send(f":book: **#{channel.name}**:\n{answer}")
     except Exception as e:
         await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+def get_voice_info(guild: discord.Guild) -> str:
+    vc_data = []
+    for vc in guild.voice_channels:
+        members = vc.members
+        if members:
+            names = ", ".join(m.display_name for m in members)
+            vc_data.append(f"**{vc.name}** ({len(members)}): {names}")
+    if not vc_data:
+        return "No one is in any voice channel."
+    return "\n".join(vc_data)
+
+
+@bot.tree.command(name="voice", description="See who's in voice channels")
+async def slash_voice(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    info = get_voice_info(interaction.guild)
+    await interaction.response.send_message(f":loud_sound: **Voice channels:**\n{info}")
 
 
 bot.run(TOKEN)
