@@ -28,37 +28,53 @@ client = OpenAI(
     },
 )
 
-EXTENSIONS = {
+LANG_EXTENSIONS = {
     "lua": ".lua", "luau": ".luau", "python": ".py", "py": ".py",
     "javascript": ".js", "js": ".js", "typescript": ".ts", "ts": ".ts",
     "html": ".html", "css": ".css", "c": ".c", "cpp": ".cpp", "c++": ".cpp",
     "csharp": ".cs", "cs": ".cs", "java": ".java", "go": ".go", "rust": ".rs",
     "ruby": ".rb", "php": ".php", "swift": ".swift", "kotlin": ".kt",
     "sql": ".sql", "shell": ".sh", "bash": ".sh", "powershell": ".ps1",
-    "ps1": ".ps1", "json": ".json", "yaml": ".yml", "xml": ".xml",
-    "markdown": ".md", "md": ".md",
+    "ps1": ".ps1", "bat": ".bat", "vbs": ".vbs", "ahk": ".ahk",
 }
 
-CODE_KEYWORDS = [
-    "make", "create", "write", "code", "script", "generate", "build",
-    "lua", "luau", "roblox", "script", "program", "function", "class",
+FILE_EXTENSIONS = {
+    **LANG_EXTENSIONS,
+    "json": ".json", "yaml": ".yml", "yml": ".yml", "xml": ".xml",
+    "markdown": ".md", "md": ".md", "txt": ".txt", "csv": ".csv",
+    "ini": ".ini", "cfg": ".cfg", "toml": ".toml", "conf": ".conf",
+    "reg": ".reg", "log": ".log", "env": ".env", "gitignore": ".gitignore",
+    "dockerfile": "", "makefile": "", "readme": ".md",
+}
+
+BINARY_TYPES = {"exe", "dll", "so", "dylib", "bin", "apk", "ipa", "msi",
+                "app", "pkg", "deb", "rpm", "img", "iso", "zip", "rar", "7z",
+                "png", "jpg", "jpeg", "gif", "bmp", "ico", "mp3", "mp4",
+                "wav", "avi", "mkv", "pdf", "docx", "xlsx", "pptx", "ttf", "otf"}
+
+CREATE_KEYWORDS = [
+    "make", "create", "write", "generate", "build", "code", "script",
+    "program", "file", "give me", "send me", "show me", "output",
 ]
 
 CHAT_SYSTEM = textwrap.dedent("""\
-You are Null, a friendly and helpful coding assistant in a Discord server.
-Your personality is chill, concise, and slightly cool.
+You are Null, a friendly coding assistant in a Discord server. You are chill, concise, and cool.
+
+You can generate ANY text-based file: code, scripts, configs, data files, documents, etc.
+The system will automatically save your output as a downloadable file.
 
 Rules:
-1. If the user asks you to write code, output the code in a code block with the language tag. Include a brief one-line explanation before the block.
-2. If the user is just chatting, reply conversationally. Keep it short.
-3. Always use proper syntax and follow best practices.
-4. If you don't know something, be honest.
-5. Respond in the same language the user speaks.
+- If asked to create/write/make something, output the content raw (no code blocks needed for non-code files).
+- For CODE files, wrap in a code block with the language tag (```python, ```lua, etc).
+- For non-code text files (json, xml, yaml, csv, bat, txt, configs, etc), output raw content.
+- If you CAN'T create something (like .exe, images, PDFs), explain why and offer alternatives.
+- For general chat, reply conversationally and keep it short.
+- Follow best practices for whatever format you're generating.
 """)
 
 CODE_SYSTEM = textwrap.dedent("""\
 You are a coding assistant. Write code based on the user's request.
-Output ONLY the code in a code block. No explanations.
+Output ONLY the code in a code block with language tag. No explanations.
 Follow best practices and proper syntax.
 """)
 
@@ -69,32 +85,59 @@ def extract_code_blocks(text: str) -> list[tuple[str | None, str]]:
     return [(lang.strip() if lang.strip() else None, code.strip()) for lang, code in matches]
 
 
-def detect_language(text: str) -> str | None:
+def detect_file_type(text: str) -> tuple[str | None, str]:
     text_lower = text.lower()
+    ext_match = re.search(r'\.(\w+)\s*file', text_lower)
+    if ext_match:
+        ext = ext_match.group(1)
+        if ext in BINARY_TYPES:
+            return ext, "binary"
+        if ext in FILE_EXTENSIONS:
+            return ext, "text"
+        return ext, "unknown"
+
+    file_type_match = re.search(r'(?:in|as|a|an)\s+(\w+)\s+(?:file|format|script)', text_lower)
+    if file_type_match:
+        typ = file_type_match.group(1)
+        if typ in BINARY_TYPES:
+            return typ, "binary"
+        if typ in FILE_EXTENSIONS:
+            return typ, "text"
+
     if any(w in text_lower for w in ["lua", "luau", "roblox"]):
-        return "lua"
-    for lang in EXTENSIONS:
-        if lang in text_lower:
-            return lang
-    return None
+        return "lua", "text"
+
+    for lang in LANG_EXTENSIONS:
+        if re.search(rf'\b{re.escape(lang)}\b', text_lower):
+            return lang, "text"
+
+    for ext_name in ["json", "yaml", "yml", "xml", "csv", "txt", "bat", "batch",
+                     "powershell", "ps1", "vbs", "ahk", "ini", "cfg", "toml",
+                     "reg", "html", "markdown", "md"]:
+        if ext_name in text_lower:
+            return ext_name, "text"
+
+    return None, "unknown"
 
 
-def is_code_request(text: str) -> bool:
+def is_create_request(text: str) -> bool:
     text_lower = text.lower()
-    return any(kw in text_lower for kw in CODE_KEYWORDS)
+    return any(kw in text_lower for kw in CREATE_KEYWORDS)
 
 
-def choose_filename(lang: str | None, content: str) -> str:
-    ext = EXTENSIONS.get(lang, ".txt") if lang else ".txt"
-    first_line = content.strip().split("\n")[0] if content else "script"
-    safe = re.sub(r"[^\w\-]", "", first_line[:20]) or "script"
+def choose_filename(file_type: str | None, content: str, index: int = 0) -> str:
+    ext = FILE_EXTENSIONS.get(file_type, ".txt") if file_type else ".txt"
+    first_line = content.strip().split("\n")[0] if content else "output"
+    safe = re.sub(r"[^\w\-]", "_", first_line[:25]) or "output"
+    if index > 0:
+        safe = f"{safe}_{index}"
     return f"{safe}{ext}"
 
 
-async def send_code_files(channel, code_blocks, lang_hint=None):
+async def send_files(channel, code_blocks, lang_hint=None):
     for i, (block_lang, code) in enumerate(code_blocks):
-        final_lang = block_lang or lang_hint
-        filename = choose_filename(final_lang, code)
+        final_type = block_lang or lang_hint
+        filename = choose_filename(final_type, code, i)
         tmp = tempfile.NamedTemporaryFile(
             mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
         )
@@ -105,6 +148,20 @@ async def send_code_files(channel, code_blocks, lang_hint=None):
             file=discord.File(tmp.name, filename=filename),
         )
         os.unlink(tmp.name)
+
+
+async def send_raw_file(channel, content: str, file_type: str | None):
+    filename = choose_filename(file_type, content)
+    tmp = tempfile.NamedTemporaryFile(
+        mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+    )
+    tmp.write(content)
+    tmp.close()
+    await channel.send(
+        f":package: `{filename}`",
+        file=discord.File(tmp.name, filename=filename),
+    )
+    os.unlink(tmp.name)
 
 
 def _call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int = 4096) -> str:
@@ -122,6 +179,46 @@ def _call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int
 
 async def call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int = 4096) -> str:
     return await asyncio.to_thread(_call_ai, system, prompt, temperature, max_tokens)
+
+
+async def handle_create_request(channel, prompt: str, reply_target=None):
+    file_type, file_kind = detect_file_type(prompt)
+
+    if file_kind == "binary":
+        msg = (
+            f":x: I can't create `.{
+                file_type}` files — that's a binary format.\n"
+            f"Try asking for source code instead! For example:\n"
+            f"- `make me a .bat file that opens a message`\n"
+            f"- `write a Python script that does X`\n"
+            f"- `create a PowerShell .ps1 script`"
+        )
+        if reply_target:
+            await reply_target.reply(msg, mention_author=False)
+        else:
+            await channel.send(msg)
+        return
+
+    is_code_type = file_type in LANG_EXTENSIONS or file_type is None
+    system = CODE_SYSTEM if is_code_type else CHAT_SYSTEM
+    text = await call_ai(system, prompt, temperature=0.2)
+
+    code_blocks = extract_code_blocks(text)
+    if code_blocks:
+        if reply_target:
+            await reply_target.reply(":white_check_mark: Here you go:", mention_author=False)
+        else:
+            await channel.send(":white_check_mark: Here you go:")
+        await send_files(channel, code_blocks, file_type)
+        for i, (blang, _) in enumerate(code_blocks):
+            if blang and blang in BINARY_TYPES:
+                await channel.send(
+                    f":warning: `.{
+                        blang}` is a binary format. The content above is source code."
+                )
+        return
+
+    await send_raw_file(channel, text, file_type)
 
 
 intents = discord.Intents.default()
@@ -166,7 +263,6 @@ async def on_message(message):
         for uid in [bot.user.id] + [m.id for m in message.mentions]:
             content = content.replace(f"<@{uid}>", "").replace(f"<@!{uid}>", "")
         content = content.strip()
-
         if not content:
             content = "hey"
 
@@ -174,30 +270,14 @@ async def on_message(message):
 
         async with message.channel.typing():
             try:
-                if is_code_request(content):
-                    lang = detect_language(content)
-                    text = await call_ai(CODE_SYSTEM, content, temperature=0.2)
-                    code_blocks = extract_code_blocks(text)
-                    if code_blocks:
-                        await send_code_files(message.channel, code_blocks, lang)
-                    else:
-                        filename = choose_filename(lang, text)
-                        tmp = tempfile.NamedTemporaryFile(
-                            mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
-                        )
-                        tmp.write(text)
-                        tmp.close()
-                        await message.reply(
-                            f":package: `{filename}`",
-                            file=discord.File(tmp.name, filename=filename),
-                        )
-                        os.unlink(tmp.name)
+                if is_create_request(content):
+                    await handle_create_request(message.channel, content, reply_target=message)
                 else:
                     answer = await call_ai(CHAT_SYSTEM, content, temperature=0.7)
                     code_blocks = extract_code_blocks(answer)
                     await message.reply(answer, mention_author=False)
                     if code_blocks:
-                        await send_code_files(message.channel, code_blocks)
+                        await send_files(message.channel, code_blocks)
             except Exception as e:
                 await message.reply(f":x: Error: {e}", mention_author=False)
         return
@@ -205,37 +285,18 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-@bot.tree.command(name="hey", description="Chat freely with Null")
+@bot.tree.command(name="hey", description="Chat with Null or ask it to create files")
 async def slash_hey(interaction: discord.Interaction, message: str):
     await interaction.response.defer()
     try:
-        if is_code_request(message):
-            lang = detect_language(message)
-            text = await call_ai(CODE_SYSTEM, message, temperature=0.2)
-            code_blocks = extract_code_blocks(text)
-            if code_blocks:
-                await interaction.followup.send(
-                    ":white_check_mark: Here's your code:"
-                )
-                await send_code_files(interaction.channel, code_blocks, lang)
-            else:
-                filename = choose_filename(lang, text)
-                tmp = tempfile.NamedTemporaryFile(
-                    mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
-                )
-                tmp.write(text)
-                tmp.close()
-                await interaction.followup.send(
-                    f":package: `{filename}`",
-                    file=discord.File(tmp.name, filename=filename),
-                )
-                os.unlink(tmp.name)
+        if is_create_request(message):
+            await handle_create_request(interaction.channel, message)
         else:
             answer = await call_ai(CHAT_SYSTEM, message, temperature=0.7)
             code_blocks = extract_code_blocks(answer)
             await interaction.followup.send(answer)
             if code_blocks:
-                await send_code_files(interaction.channel, code_blocks)
+                await send_files(interaction.channel, code_blocks)
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
 
@@ -249,19 +310,9 @@ async def slash_lua(interaction: discord.Interaction, description: str):
         code_blocks = extract_code_blocks(text)
         if code_blocks:
             await interaction.followup.send(":white_check_mark: Here's your Lua script:")
-            await send_code_files(interaction.channel, code_blocks, "lua")
+            await send_files(interaction.channel, code_blocks, "lua")
         else:
-            filename = choose_filename("lua", text)
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
-            )
-            tmp.write(text)
-            tmp.close()
-            await interaction.followup.send(
-                f":package: `{filename}`",
-                file=discord.File(tmp.name, filename=filename),
-            )
-            os.unlink(tmp.name)
+            await send_raw_file(interaction.channel, text, "lua")
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
 
@@ -270,8 +321,10 @@ async def slash_lua(interaction: discord.Interaction, description: str):
 async def slash_script(interaction: discord.Interaction, language: str, description: str):
     await interaction.response.defer()
     lang = language.lower()
-    if lang not in EXTENSIONS:
-        await interaction.followup.send(f":x: Unknown language. Try: lua, python, js, etc.")
+    if lang not in LANG_EXTENSIONS and lang not in FILE_EXTENSIONS:
+        await interaction.followup.send(
+            f":x: Unknown type: `{language}`. Try: lua, python, js, html, bat, json, etc."
+        )
         return
     try:
         prompt = f"Write a {language} script that: {description}"
@@ -279,19 +332,33 @@ async def slash_script(interaction: discord.Interaction, language: str, descript
         code_blocks = extract_code_blocks(text)
         if code_blocks:
             await interaction.followup.send(f":white_check_mark: Here's your {language} code:")
-            await send_code_files(interaction.channel, code_blocks, lang)
+            await send_files(interaction.channel, code_blocks, lang)
         else:
-            filename = choose_filename(lang, text)
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
-            )
-            tmp.write(text)
-            tmp.close()
-            await interaction.followup.send(
-                f":package: `{filename}`",
-                file=discord.File(tmp.name, filename=filename),
-            )
-            os.unlink(tmp.name)
+            await send_raw_file(interaction.channel, text, lang)
+    except Exception as e:
+        await interaction.followup.send(f":x: Error: {e}")
+
+
+@bot.tree.command(name="file", description="Generate any type of file")
+async def slash_file(interaction: discord.Interaction, file_type: str, description: str):
+    await interaction.response.defer()
+    ftype = file_type.lower().lstrip(".")
+    if ftype in BINARY_TYPES:
+        await interaction.followup.send(
+            f":x: `.{
+                ftype}` is a binary format — I can only create text-based files.\n"
+            f"Try: bat, ps1, py, js, html, json, csv, txt, xml, ini, reg, etc."
+        )
+        return
+    try:
+        prompt = f"Create a .{ftype} file that: {description}"
+        text = await call_ai(CHAT_SYSTEM, prompt, temperature=0.2)
+        code_blocks = extract_code_blocks(text)
+        if code_blocks:
+            await interaction.followup.send(f":white_check_mark: Here's your .{ftype} file:")
+            await send_files(interaction.channel, code_blocks, ftype)
+        else:
+            await send_raw_file(interaction.channel, text, ftype)
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
 
@@ -304,7 +371,7 @@ async def slash_ask(interaction: discord.Interaction, question: str):
         code_blocks = extract_code_blocks(answer)
         await interaction.followup.send(answer)
         if code_blocks:
-            await send_code_files(interaction.channel, code_blocks)
+            await send_files(interaction.channel, code_blocks)
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
 
