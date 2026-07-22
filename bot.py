@@ -627,7 +627,7 @@ RADIO_STATIONS = {
     "hiphop": "https://stream.radioparadise.com/hiphop-128",
 }
 
-PIPED_API = "https://pipedapi.kavin.rocks"
+PIPED_API = "https://api.piped.private.coffee"
 
 @bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm, classical, hiphop)")
 @app_commands.describe(station="Station name or stream URL")
