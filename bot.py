@@ -2076,9 +2076,13 @@ async def slash_ticketsetup(
     support_role: discord.Role,
     welcome_message: str = "Support will be with you shortly.",
 ):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
     if not is_admin(interaction.user):
         await interaction.response.send_message(":x: Admin only.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     await asyncio.to_thread(
         _set_ticket_settings,
         interaction.guild.id,
@@ -2087,7 +2091,7 @@ async def slash_ticketsetup(
         support_role_id=support_role.id,
         welcome_message=welcome_message,
     )
-    await interaction.response.send_message(
+    await interaction.followup.send(
         f":white_check_mark: Ticket system set up.\n"
         f"Category: {category.mention}\n"
         f"Log channel: {log_channel.mention}\n"
@@ -2110,9 +2114,13 @@ async def slash_ticketpanel(
     description: str = "Click the button below to open a support ticket.",
     channel: discord.TextChannel = None,
 ):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
     if not is_admin(interaction.user):
         await interaction.response.send_message(":x: Admin only.", ephemeral=True)
         return
+    await interaction.response.defer(ephemeral=True)
     target = channel or interaction.channel
     embed = discord.Embed(
         title=":ticket: Support Tickets",
@@ -2125,7 +2133,7 @@ async def slash_ticketpanel(
         _save_ticket_panel,
         interaction.guild.id, target.id, msg.id, label, emoji, description,
     )
-    await interaction.response.send_message(f":white_check_mark: Ticket panel sent to {target.mention}", ephemeral=True)
+    await interaction.followup.send(f":white_check_mark: Ticket panel sent to {target.mention}", ephemeral=True)
 
 
 @bot.tree.command(name="ticket", description="Create a support ticket")
