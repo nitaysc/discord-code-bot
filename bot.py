@@ -1019,8 +1019,10 @@ class TicketPanelView(discord.ui.View):
                 await interaction.followup.send(f":x: You already have an open ticket: {channel.mention}", ephemeral=True)
                 return
         channel = await _create_ticket_channel(interaction.guild, interaction.user, settings)
-        await asyncio.to_thread(_create_ticket, interaction.guild.id, channel.id, interaction.user.id)
-        await _send_ticket_welcome(channel, interaction.user, settings)
+        await asyncio.gather(
+            asyncio.to_thread(_create_ticket, interaction.guild.id, channel.id, interaction.user.id),
+            _send_ticket_welcome(channel, interaction.user, settings),
+        )
         await interaction.followup.send(f":white_check_mark: Ticket created: {channel.mention}", ephemeral=True)
 
 
@@ -2144,7 +2146,7 @@ async def slash_ticket(interaction: discord.Interaction):
         await interaction.response.send_message(":x: Server only.", ephemeral=True)
         return
     await interaction.response.defer(ephemeral=True)
-    settings = _get_ticket_settings(interaction.guild.id)
+    settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
     if not settings.get("category_id"):
         await interaction.followup.send(":x: Ticket system is not set up. Ask an admin to run `/ticketsetup`.", ephemeral=True)
         return
@@ -2155,8 +2157,10 @@ async def slash_ticket(interaction: discord.Interaction):
             await interaction.followup.send(f":x: You already have an open ticket: {channel.mention}", ephemeral=True)
             return
     channel = await _create_ticket_channel(interaction.guild, interaction.user, settings)
-    await asyncio.to_thread(_create_ticket, interaction.guild.id, channel.id, interaction.user.id)
-    await _send_ticket_welcome(channel, interaction.user, settings)
+    await asyncio.gather(
+        asyncio.to_thread(_create_ticket, interaction.guild.id, channel.id, interaction.user.id),
+        _send_ticket_welcome(channel, interaction.user, settings),
+    )
     await interaction.followup.send(f":white_check_mark: Ticket created: {channel.mention}", ephemeral=True)
 
 
