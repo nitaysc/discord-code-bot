@@ -16,13 +16,20 @@ from duckduckgo_search import DDGS
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-AI_KEY = os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
+CLOUDFLARE_KEY = os.getenv("CLOUDFLARE_API_KEY")
+CLOUDFLARE_ACCOUNT = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+AI_KEY = CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("AI_MODEL", "@cf/meta/llama-3.2-11b-vision-instruct")
 
 if not TOKEN or not AI_KEY:
-    raise RuntimeError("Missing DISCORD_TOKEN or OPENAI_API_KEY in .env file")
+    raise RuntimeError("Missing DISCORD_TOKEN or AI API key in .env file")
 
-if os.getenv("OPENAI_API_KEY"):
+if CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
+    client = OpenAI(
+        base_url=f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT}/ai/v1/",
+        api_key=CLOUDFLARE_KEY,
+    )
+elif os.getenv("OPENAI_API_KEY"):
     client = OpenAI(api_key=AI_KEY)
 elif os.getenv("GROQ_API_KEY"):
     client = OpenAI(
@@ -54,30 +61,20 @@ async def web_search(query: str, max_results: int = 5) -> str:
         return f"Search error: {e}"
 
 
-async def should_search(question: str) -> tuple[bool, str]:
-    prompt = (
-        "You are a classifier. Decide if the following user question needs "
-        "up-to-date internet information to answer correctly. "
-        "Examples that need search: current news, weather, sports scores, prices, "
-        "recent events, today's date, latest updates, anything time-sensitive, "
-        "or facts you may not know. "
-        "Reply with ONLY 'YES: <search query>' or 'NO'.\n\n"
-        f"Question: {question}"
-    )
-    try:
-        answer = await call_ai(
-            "You are a helpful classifier.",
-            prompt,
-            temperature=0.0,
-            max_tokens=100,
-        )
-        answer = answer.strip()
-        if answer.upper().startswith("YES:"):
-            search_query = answer[4:].strip() or question
-            return True, search_query
-        return False, ""
-    except Exception:
-        return False, ""
+SEARCH_TRIGGER_WORDS = {
+    "latest", "current", "today", "now", "news", "weather", "price", "prices",
+    "score", "scores", "update", "recent", "happened", "happening", "live",
+    "stock", "crypto", "bitcoin", "election", "who won", "who won",
+    "release date", "when did", "how old is", "age of", "net worth",
+    "2025", "2026", "2027",
+}
+
+
+def should_search(question: str) -> tuple[bool, str]:
+    lowered = question.lower()
+    if any(word in lowered for word in SEARCH_TRIGGER_WORDS):
+        return True, question
+    return False, ""
 
 
 LANG_EXTENSIONS = {
@@ -284,7 +281,7 @@ async def answer_with_web_search_if_needed(
     image_urls: list[str] | None = None,
     temperature: float = 0.7,
 ) -> str:
-    needs_search, search_query = await should_search(prompt)
+    needs_search, search_query = should_search(prompt)
     if needs_search:
         search_results = await web_search(search_query, max_results=5)
         if search_results:
