@@ -374,9 +374,24 @@ class CodeBot(commands.Bot):
         )
         await self.change_presence(activity=activity, status=discord.Status.online)
         print(f"Online as {self.user}")
+        for guild in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=guild)
+                await self.tree.sync(guild=guild)
+                print(f"Synced commands to guild: {guild.name}")
+            except Exception as e:
+                print(f"Failed to sync to {guild.name}: {e}")
 
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         print(f"Lavalink node ready: {payload.node.uri}")
+
+    async def on_guild_join(self, guild: discord.Guild):
+        try:
+            self.tree.copy_global_to(guild=guild)
+            await self.tree.sync(guild=guild)
+            print(f"Synced commands to new guild: {guild.name}")
+        except Exception as e:
+            print(f"Failed to sync to new guild {guild.name}: {e}")
 
 
 bot = CodeBot()
