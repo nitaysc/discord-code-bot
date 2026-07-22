@@ -1332,18 +1332,18 @@ async def slash_rank(interaction: discord.Interaction, member: discord.Member = 
     if not interaction.guild:
         await interaction.response.send_message(":x: Server only.", ephemeral=True)
         return
+    await interaction.response.defer()
     target = member or interaction.user
-    data = get_rank(interaction.guild.id, target.id)
+    try:
+        data = get_rank(interaction.guild.id, target.id)
+    except Exception as e:
+        await interaction.followup.send(f":x: Database error: {e}", ephemeral=True)
+        return
     if not data:
-        await interaction.response.send_message(
+        await interaction.followup.send(
             f":x: {target.mention} has no XP yet. Start chatting!", ephemeral=True
         )
         return
-    embed = discord.Embed(
-        title=f":chart_with_upwards_trend: {target.display_name}'s Rank",
-        color=discord.Color.blue(),
-    )
-    embed.set_thumbnail(url=target.display_avatar.url)
     next_xp = xp_for_level(data["level"] + 1)
     embed = discord.Embed(
         title=f":chart_with_upwards_trend: {target.display_name}'s Rank",
@@ -1356,10 +1356,10 @@ async def slash_rank(interaction: discord.Interaction, member: discord.Member = 
     embed.add_field(name="Next Level", value=f"{next_xp - data['xp']} XP needed", inline=True)
     try:
         card = await generate_rank_card(target, data)
-        await interaction.response.send_message(embed=embed, file=discord.File(card, filename="rank.png"))
+        await interaction.followup.send(embed=embed, file=discord.File(card, filename="rank.png"))
     except Exception as e:
         print(f"Rank card error: {e}")
-        await interaction.response.send_message(embed=embed)
+        await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="leaderboard", description="Top 10 most active members")
@@ -1367,9 +1367,14 @@ async def slash_leaderboard(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message(":x: Server only.", ephemeral=True)
         return
-    rows = get_leaderboard(interaction.guild.id, 10)
+    await interaction.response.defer()
+    try:
+        rows = get_leaderboard(interaction.guild.id, 10)
+    except Exception as e:
+        await interaction.followup.send(f":x: Database error: {e}", ephemeral=True)
+        return
     if not rows:
-        await interaction.response.send_message(":x: No one has XP yet.")
+        await interaction.followup.send(":x: No one has XP yet.")
         return
     lines = []
     for i, (user_id, xp, level) in enumerate(rows, 1):
@@ -1381,7 +1386,7 @@ async def slash_leaderboard(interaction: discord.Interaction):
         description="\n".join(lines),
         color=discord.Color.gold(),
     )
-    await interaction.response.send_message(embed=embed)
+    await interaction.followup.send(embed=embed)
 
 
 @bot.tree.command(name="setlevelchannel", description="Set where level-up messages go (Admin only)")
