@@ -1058,6 +1058,354 @@ class TicketPanelView(discord.ui.View):
         await interaction.followup.send(f":white_check_mark: Ticket created: {channel.mention}", ephemeral=True)
 
 
+# --- Admin action execution from chat ---
+
+ADMIN_ACTION_HELPERS: dict[str, callable] = {}
+
+
+def _parse_duration(duration_str: str) -> timedelta | None:
+    duration_str = duration_str.strip().lower()
+    units = {"s": 1, "sec": 1, "m": 60, "min": 60, "h": 3600, "hr": 3600, "d": 86400, "day": 86400}
+    total_seconds = 0
+    parts = re.findall(r"(\d+)\s*([a-z]+)", duration_str)
+    if not parts:
+        try:
+            total_seconds = int(duration_str) * 3600
+        except ValueError:
+            return None
+    else:
+        for value, unit in parts:
+            multiplier = units.get(unit.rstrip("s"), 0)
+            if not multiplier:
+                return None
+            total_seconds += int(value) * multiplier
+    if total_seconds <= 0:
+        return None
+    return timedelta(seconds=total_seconds)
+
+
+async def _action_kick(message: discord.Message, target: discord.Member, reason: str) -> str:
+    if not message.author.guild_permissions.kick_members:
+        return ":x: You don't have permission to kick members."
+    if not message.guild.me.guild_permissions.kick_members:
+        return ":x: I don't have permission to kick members."
+    if message.author.top_role <= target.top_role and not message.author == message.guild.owner:
+        return ":x: You can't kick someone with a higher or equal role."
+    try:
+        await target.kick(reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Kicked {target.mention}."
+    except Exception as e:
+        return f":x: Failed to kick: {e}"
+
+
+async def _action_ban(message: discord.Message, target: discord.Member, reason: str) -> str:
+    if not message.author.guild_permissions.ban_members:
+        return ":x: You don't have permission to ban members."
+    if not message.guild.me.guild_permissions.ban_members:
+        return ":x: I don't have permission to ban members."
+    if message.author.top_role <= target.top_role and not message.author == message.guild.owner:
+        return ":x: You can't ban someone with a higher or equal role."
+    try:
+        await target.ban(reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Banned {target.mention}."
+    except Exception as e:
+        return f":x: Failed to ban: {e}"
+
+
+async def _action_timeout(message: discord.Message, target: discord.Member, duration_str: str, reason: str) -> str:
+    if not message.author.guild_permissions.moderate_members:
+        return ":x: You don't have permission to timeout members."
+    if not message.guild.me.guild_permissions.moderate_members:
+        return ":x: I don't have permission to timeout members."
+    duration = _parse_duration(duration_str)
+    if not duration:
+        return ":x: Invalid duration. Use like `1h`, `30m`, `1d`."
+    if duration > timedelta(days=28):
+        return ":x: Timeout can't be longer than 28 days."
+    if message.author.top_role <= target.top_role and not message.author == message.guild.owner:
+        return ":x: You can't timeout someone with a higher or equal role."
+    try:
+        until = datetime.now(timezone.utc) + duration
+        await target.timeout(until, reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Timed out {target.mention} for {duration_str}."
+    except Exception as e:
+        return f":x: Failed to timeout: {e}"
+
+
+async def _action_unban(message: discord.Message, user_id_or_mention: str) -> str:
+    if not message.author.guild_permissions.ban_members:
+        return ":x: You don't have permission to unban members."
+    if not message.guild.me.guild_permissions.ban_members:
+        return ":x: I don't have permission to unban members."
+    user_id = _extract_user_id(user_id_or_mention)
+    if not user_id:
+        return ":x: Could not find user. Provide an ID or mention."
+    try:
+        ban_entry = await message.guild.fetch_ban(discord.Object(id=user_id))
+        await message.guild.unban(ban_entry.user, reason=f"{message.author}")
+        return f":white_check_mark: Unbanned {ban_entry.user.mention}."
+    except Exception as e:
+        return f":x: Failed to unban: {e}"
+
+
+async def _action_create_channel(message: discord.Message, name: str, channel_type: str) -> str:
+    if not message.author.guild_permissions.manage_channels:
+        return ":x: You don't have permission to manage channels."
+    if not message.guild.me.guild_permissions.manage_channels:
+        return ":x: I don't have permission to manage channels."
+    name = name.strip("#")
+    try:
+        if channel_type.lower() in ("voice", "vc"):
+            ch = await message.guild.create_voice_channel(name)
+        elif channel_type.lower() in ("category", "cat"):
+            ch = await message.guild.create_category(name)
+        else:
+            ch = await message.guild.create_text_channel(name)
+        return f":white_check_mark: Created {ch.mention}."
+    except Exception as e:
+        return f":x: Failed to create channel: {e}"
+
+
+async def _action_delete_channel(message: discord.Message, channel: discord.TextChannel | discord.VoiceChannel | discord.CategoryChannel) -> str:
+    if not message.author.guild_permissions.manage_channels:
+        return ":x: You don't have permission to manage channels."
+    if not message.guild.me.guild_permissions.manage_channels:
+        return ":x: I don't have permission to manage channels."
+    try:
+        await channel.delete(reason=f"{message.author}")
+        return f":white_check_mark: Deleted #{channel.name}."
+    except Exception as e:
+        return f":x: Failed to delete channel: {e}"
+
+
+async def _action_lock(message: discord.Message, channel: discord.TextChannel) -> str:
+    if not message.author.guild_permissions.manage_channels:
+        return ":x: You don't have permission to manage channels."
+    if not message.guild.me.guild_permissions.manage_channels:
+        return ":x: I don't have permission to manage channels."
+    try:
+        await channel.set_permissions(channel.guild.default_role, send_messages=False)
+        return f":white_check_mark: Locked {channel.mention}."
+    except Exception as e:
+        return f":x: Failed to lock: {e}"
+
+
+async def _action_unlock(message: discord.Message, channel: discord.TextChannel) -> str:
+    if not message.author.guild_permissions.manage_channels:
+        return ":x: You don't have permission to manage channels."
+    if not message.guild.me.guild_permissions.manage_channels:
+        return ":x: I don't have permission to manage channels."
+    try:
+        await channel.set_permissions(channel.guild.default_role, send_messages=None)
+        return f":white_check_mark: Unlocked {channel.mention}."
+    except Exception as e:
+        return f":x: Failed to unlock: {e}"
+
+
+async def _action_slowmode(message: discord.Message, channel: discord.TextChannel, seconds: str) -> str:
+    if not message.author.guild_permissions.manage_channels:
+        return ":x: You don't have permission to manage channels."
+    if not message.guild.me.guild_permissions.manage_channels:
+        return ":x: I don't have permission to manage channels."
+    try:
+        secs = int(seconds)
+        await channel.edit(slowmode_delay=secs)
+        return f":white_check_mark: Set slowmode in {channel.mention} to {secs} seconds."
+    except Exception as e:
+        return f":x: Failed to set slowmode: {e}"
+
+
+async def _action_purge(message: discord.Message, amount: str) -> str:
+    if not message.author.guild_permissions.manage_messages:
+        return ":x: You don't have permission to manage messages."
+    if not message.guild.me.guild_permissions.manage_messages:
+        return ":x: I don't have permission to manage messages."
+    try:
+        count = int(amount)
+        if count < 1 or count > 100:
+            return ":x: Purge amount must be between 1 and 100."
+        deleted = await message.channel.purge(limit=count + 1)
+        return f":white_check_mark: Deleted {len(deleted)} messages."
+    except Exception as e:
+        return f":x: Failed to purge: {e}"
+
+
+async def _action_addrole(message: discord.Message, target: discord.Member, role: discord.Role) -> str:
+    if not message.author.guild_permissions.manage_roles:
+        return ":x: You don't have permission to manage roles."
+    if not message.guild.me.guild_permissions.manage_roles:
+        return ":x: I don't have permission to manage roles."
+    if message.author.top_role <= role and not message.author == message.guild.owner:
+        return ":x: You can't assign a role higher than or equal to your top role."
+    if message.guild.me.top_role <= role:
+        return ":x: My role is too low to assign that role."
+    try:
+        await target.add_roles(role, reason=f"{message.author}")
+        return f":white_check_mark: Added {role.mention} to {target.mention}."
+    except Exception as e:
+        return f":x: Failed to add role: {e}"
+
+
+async def _action_removerole(message: discord.Message, target: discord.Member, role: discord.Role) -> str:
+    if not message.author.guild_permissions.manage_roles:
+        return ":x: You don't have permission to manage roles."
+    if not message.guild.me.guild_permissions.manage_roles:
+        return ":x: I don't have permission to manage roles."
+    if message.author.top_role <= role and not message.author == message.guild.owner:
+        return ":x: You can't remove a role higher than or equal to your top role."
+    if message.guild.me.top_role <= role:
+        return ":x: My role is too low to remove that role."
+    try:
+        await target.remove_roles(role, reason=f"{message.author}")
+        return f":white_check_mark: Removed {role.mention} from {target.mention}."
+    except Exception as e:
+        return f":x: Failed to remove role: {e}"
+
+
+def _extract_user_id(text: str) -> int | None:
+    text = text.strip()
+    match = re.match(r"<@!?(\d+)>", text)
+    if match:
+        return int(match.group(1))
+    if text.isdigit():
+        return int(text)
+    return None
+
+
+def _resolve_member(guild: discord.Guild, text: str) -> discord.Member | None:
+    user_id = _extract_user_id(text)
+    if user_id:
+        return guild.get_member(user_id)
+    text_lower = text.lower().strip("@")
+    for member in guild.members:
+        if member.name.lower() == text_lower or member.display_name.lower() == text_lower:
+            return member
+    return None
+
+
+def _resolve_role(guild: discord.Guild, text: str) -> discord.Role | None:
+    text = text.strip()
+    match = re.match(r"<@&(\d+)>", text)
+    if match:
+        return guild.get_role(int(match.group(1)))
+    text_lower = text.lower().strip("@")
+    for role in guild.roles:
+        if role.name.lower() == text_lower:
+            return role
+    return None
+
+
+def _resolve_channel(guild: discord.Guild, text: str) -> discord.abc.GuildChannel | None:
+    text = text.strip()
+    match = re.match(r"<#(\d+)>", text)
+    if match:
+        return guild.get_channel(int(match.group(1)))
+    text_lower = text.lower().strip("#")
+    for channel in guild.channels:
+        if channel.name.lower() == text_lower:
+            return channel
+    return None
+
+
+async def execute_admin_actions(message: discord.Message, text: str) -> list[str]:
+    if not message.guild:
+        return []
+    results = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line.startswith("ACTION:"):
+            continue
+        action_text = line[7:].strip()
+        parts = action_text.split(None, 2)
+        if not parts:
+            continue
+        action = parts[0].lower()
+        args = parts[1:]
+        result = await _dispatch_admin_action(message, action, args)
+        if result:
+            results.append(result)
+    return results
+
+
+async def _dispatch_admin_action(message: discord.Message, action: str, args: list[str]) -> str:
+    guild = message.guild
+    try:
+        if action == "kick" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_kick(message, target, reason)
+
+        if action == "ban" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_ban(message, target, reason)
+
+        if action == "timeout" and len(args) >= 2:
+            target = _resolve_member(guild, args[0])
+            duration = args[1]
+            reason = args[2] if len(args) > 2 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_timeout(message, target, duration, reason)
+
+        if action == "unban" and len(args) >= 1:
+            return await _action_unban(message, args[0])
+
+        if action == "create" and len(args) >= 2 and args[0].lower() == "channel":
+            name = args[1]
+            channel_type = args[2] if len(args) > 2 else "text"
+            return await _action_create_channel(message, name, channel_type)
+
+        if action == "delete" and len(args) >= 2 and args[0].lower() == "channel":
+            channel = _resolve_channel(guild, args[1])
+            if not channel:
+                return ":x: Channel not found."
+            return await _action_delete_channel(message, channel)
+
+        if action == "lock" and len(args) >= 1:
+            channel = _resolve_channel(guild, args[0])
+            if not isinstance(channel, discord.TextChannel):
+                return ":x: Text channel not found."
+            return await _action_lock(message, channel)
+
+        if action == "unlock" and len(args) >= 1:
+            channel = _resolve_channel(guild, args[0])
+            if not isinstance(channel, discord.TextChannel):
+                return ":x: Text channel not found."
+            return await _action_unlock(message, channel)
+
+        if action == "slowmode" and len(args) >= 2:
+            channel = _resolve_channel(guild, args[0])
+            if not isinstance(channel, discord.TextChannel):
+                return ":x: Text channel not found."
+            return await _action_slowmode(message, channel, args[1])
+
+        if action == "purge" and len(args) >= 1:
+            return await _action_purge(message, args[0])
+
+        if action == "addrole" and len(args) >= 2:
+            target = _resolve_member(guild, args[0])
+            role = _resolve_role(guild, args[1])
+            if not target or not role:
+                return ":x: Member or role not found."
+            return await _action_addrole(message, target, role)
+
+        if action == "removerole" and len(args) >= 2:
+            target = _resolve_member(guild, args[0])
+            role = _resolve_role(guild, args[1])
+            if not target or not role:
+                return ":x: Member or role not found."
+            return await _action_removerole(message, target, role)
+
+        return f":x: Unknown admin action: {action}"
+    except Exception as e:
+        return f":x: Admin action error: {e}"
+
+
 async def fetch_avatar(url: str) -> bytes:
     async with aiohttp.ClientSession() as session:
         async with session.get(url) as resp:
@@ -1174,7 +1522,10 @@ MY CAPABILITIES:
 - Create .exe source with compile instructions
 - Read & summarize channels: /read #channel
 - See who's in voice: /voice or ask "who's in vc?"
-- Kick/vkick/say/clear: admin commands
+- Kick/ban/timeout/unban users via chat (only if the requester has permission)
+- Create/delete channels, lock/unlock channels, set slowmode via chat (only if the requester has permission)
+- Add/remove roles, purge messages via chat (only if the requester has permission)
+- Ticket system: /ticketsetup, /ticketpanel, /ticket, /claim, /close, /addtoticket, /removefromticket
 - Normal chat, coding help, answering questions
 - See images: attach an image and ask about it
 - Read files: drop a .lua, .txt, .py, .json, or any text file and ask about it
@@ -1195,6 +1546,9 @@ Rules:
 - For code/file requests, output the content and the system sends it as a downloadable file.
 - For vague questions like "what is this" or "what does this do" about a file you just sent, explain in text. Do NOT generate new code.
 - Do NOT output code blocks unless the user explicitly asked for code, a script, or a file.
+- For admin actions (kick, ban, timeout, create/delete channel, lock/unlock, slowmode, add/remove role, purge): you MAY execute them by putting an ACTION line at the end of your response. The system checks if the user has permission before running it.
+- Format admin actions like: ACTION: kick @user spam | ACTION: ban @user breaking rules | ACTION: timeout @user 1h spam | ACTION: create channel #logs text | ACTION: delete channel #spam | ACTION: lock #general | ACTION: unlock #general | ACTION: slowmode #general 5 | ACTION: purge 10 | ACTION: addrole @user @Member | ACTION: removerole @user @Member
+- NEVER execute an admin action without an ACTION: line. The user must explicitly ask for the action.
 - For ANY question about current events, recent news, sports results, today's date, future dates, or anything time-sensitive: you MUST rely on the web search results provided in the prompt, NOT your training data. Your training data has a cutoff and may be outdated.
 - If web search results are provided, use them as the authoritative source. Do not contradict them with your built-in knowledge.
 - If no search results are provided and the question is time-sensitive, say you don't have current info rather than guessing.
@@ -1812,7 +2166,14 @@ async def on_message(message):
                         prompt, history, image_urls=image_urls if image_urls else None
                     )
                     add_to_history(channel_id, "assistant", answer)
-                    await message.reply(answer, mention_author=False)
+                    visible_answer = "\n".join(
+                        line for line in answer.split("\n") if not line.strip().startswith("ACTION:")
+                    ).strip()
+                    if visible_answer:
+                        await message.reply(visible_answer, mention_author=False)
+                    action_results = await execute_admin_actions(message, answer)
+                    for result in action_results:
+                        await message.channel.send(result)
             except Exception as e:
                 await message.reply(f":x: Error: {e}", mention_author=False)
         return
