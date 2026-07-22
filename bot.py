@@ -4537,31 +4537,42 @@ class TempVoiceInterface(discord.ui.View):
         self.target_channel_id = target_channel_id
         self.current_privacy = current_privacy
 
+    async def on_error(self, interaction: discord.Interaction, error: Exception, item: discord.ui.Item):
+        print(f"[TEMP VOICE] Button {item.custom_id} error: {error}")
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Something went wrong. Try again.", ephemeral=True)
+        except Exception:
+            pass
+
     # Row 1: Name, Limit, Privacy toggle
     @discord.ui.button(label="Name", emoji="✏️", style=discord.ButtonStyle.secondary, custom_id="tvif_name")
     async def tv_name(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        await interaction.response.send_modal(TempVoiceNameModal(self.target_channel_id))
+        try:
+            await interaction.response.send_modal(TempVoiceNameModal(self.target_channel_id))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_name error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open name editor.", ephemeral=True)
 
     @discord.ui.button(label="Limit", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="tvif_limit")
     async def tv_limit(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        await interaction.response.send_modal(TempVoiceLimitModal(self.target_channel_id))
+        try:
+            await interaction.response.send_modal(TempVoiceLimitModal(self.target_channel_id))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_limit error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open limit editor.", ephemeral=True)
 
     @discord.ui.button(label="Public", emoji="🔓", style=discord.ButtonStyle.success, custom_id="tvif_privacy")
     async def tv_privacy(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        new_mode = _toggle_privacy(record["privacy"])
         try:
+            await interaction.response.defer(ephemeral=True)
+            record, ch, err = _check_owner(interaction, self.target_channel_id)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
+            new_mode = _toggle_privacy(record["privacy"])
             await _apply_privacy(ch, new_mode)
             _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], privacy=new_mode)
             _save_user_prefs(interaction.guild.id, interaction.user.id, saved_privacy=new_mode)
@@ -4571,140 +4582,180 @@ class TempVoiceInterface(discord.ui.View):
             style_map = {"public": discord.ButtonStyle.success, "locked": discord.ButtonStyle.primary, "hidden": discord.ButtonStyle.danger}
             button.style = style_map.get(new_mode, discord.ButtonStyle.success)
             self.current_privacy = new_mode
-            await interaction.response.edit_message(view=self)
+            await interaction.followup.edit_message(interaction.message.id, view=self)
         except Exception as e:
-            await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            print(f"[TEMP VOICE] tv_privacy error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f":x: {e}", ephemeral=True)
 
     # Row 2: Waiting Room, Chat Thread
     @discord.ui.button(label="Waiting", emoji="🕐", style=discord.ButtonStyle.secondary, custom_id="tvif_waiting")
     async def tv_waiting(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        # Toggle waiting room: create a stage-like channel below this one
-        guild = ch.guild
-        existing = discord.utils.get(guild.voice_channels, name=f"waiting-{ch.id}")
-        if existing:
-            await interaction.response.send_message(":x: Waiting room already exists.", ephemeral=True)
-            return
         try:
+            await interaction.response.defer(ephemeral=True)
+            record, ch, err = _check_owner(interaction, self.target_channel_id)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
+            guild = ch.guild
+            existing = discord.utils.get(guild.voice_channels, name=f"waiting-{ch.id}")
+            if existing:
+                await interaction.followup.send(":x: Waiting room already exists.", ephemeral=True)
+                return
             wait_ch = await guild.create_voice_channel(
                 name=f"⏳ {ch.name} Waiting",
                 category=ch.category,
                 position=ch.position + 1,
                 user_limit=0,
             )
-            # Set perms: default can join waiting room but not main
             await ch.set_permissions(guild.default_role, connect=False, view_channel=False)
-            await interaction.response.send_message(f":white_check_mark: Waiting room created: {wait_ch.mention}\nUsers must be trusted to enter your main channel.", ephemeral=True)
+            await interaction.followup.send(f":white_check_mark: Waiting room created: {wait_ch.mention}\nUsers must be trusted to enter your main channel.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+            print(f"[TEMP VOICE] tv_waiting error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f":x: {e}", ephemeral=True)
 
     @discord.ui.button(label="Chat Thread", emoji="💬", style=discord.ButtonStyle.secondary, custom_id="tvif_thread")
     async def tv_thread(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        txt = interaction.guild.get_channel(ch.id)
-        if not txt or not isinstance(txt, discord.TextChannel):
-            await interaction.response.send_message(":x: No text chat available for this voice channel.", ephemeral=True)
-            return
         try:
-            thread = await txt.create_thread(name=f"💬 {ch.name} Chat", type=discord.ChannelType.public_thread)
-            await interaction.response.send_message(f":white_check_mark: Thread created: {thread.mention}", ephemeral=True)
+            await interaction.response.defer(ephemeral=True)
+            record, ch, err = _check_owner(interaction, self.target_channel_id)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
+            thread = await ch.create_thread(name=f"💬 {ch.name} Chat", type=discord.ChannelType.public_thread)
+            await interaction.followup.send(f":white_check_mark: Thread created: {thread.mention}", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+            print(f"[TEMP VOICE] tv_thread error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f":x: {e}", ephemeral=True)
 
     # Row 3: Trust, Untrust, Block, Unblock
     @discord.ui.button(label="Trust", emoji="✅", style=discord.ButtonStyle.success, custom_id="tvif_trust")
     async def tv_trust(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "trust"))
+        try:
+            await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "trust"))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_trust error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open user editor.", ephemeral=True)
 
     @discord.ui.button(label="Untrust", emoji="➖", style=discord.ButtonStyle.secondary, custom_id="tvif_untrust")
     async def tv_untrust(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "untrust"))
+        try:
+            await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "untrust"))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_untrust error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open user editor.", ephemeral=True)
 
     @discord.ui.button(label="Block", emoji="🚫", style=discord.ButtonStyle.danger, custom_id="tvif_block")
     async def tv_block(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "block"))
+        try:
+            await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "block"))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_block error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open user editor.", ephemeral=True)
 
     @discord.ui.button(label="Unblock", emoji="♻️", style=discord.ButtonStyle.secondary, custom_id="tvif_unblock")
     async def tv_unblock(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "unblock"))
+        try:
+            await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "unblock"))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_unblock error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open user editor.", ephemeral=True)
 
     # Row 4: Invite, Kick, Info, Reset, Delete
     @discord.ui.button(label="Invite", emoji="📨", style=discord.ButtonStyle.secondary, custom_id="tvif_invite")
     async def tv_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "invite"))
+        try:
+            await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "invite"))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_invite error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open user editor.", ephemeral=True)
 
     @discord.ui.button(label="Kick", emoji="👢", style=discord.ButtonStyle.danger, custom_id="tvif_kick")
     async def tv_kick(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "kick"))
+        try:
+            await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "kick"))
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_kick error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(":x: Failed to open user editor.", ephemeral=True)
 
     @discord.ui.button(label="Info", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="tvif_info")
     async def tv_info(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        owner = ch.guild.get_member(int(record["owner_id"]))
-        owner_name = owner.mention if owner else f"User {record['owner_id']}"
-        created = datetime.fromtimestamp(record["created_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if record["created_at"] else "?"
-        embed = discord.Embed(title=f"🎧 {ch.name}", color=0x2b2d31)
-        embed.add_field(name="Owner", value=owner_name, inline=True)
-        embed.add_field(name="Users", value=f"{len(ch.members)}/{ch.user_limit or '∞'}", inline=True)
-        embed.add_field(name="Privacy", value=record["privacy"].title(), inline=True)
-        embed.add_field(name="Created", value=created, inline=False)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+            record, ch, err = _check_owner(interaction, self.target_channel_id)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
+            owner = ch.guild.get_member(int(record["owner_id"]))
+            owner_name = owner.mention if owner else f"User {record['owner_id']}"
+            created = datetime.fromtimestamp(record["created_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if record["created_at"] else "?"
+            embed = discord.Embed(title=f"🎧 {ch.name}", color=0x2b2d31)
+            embed.add_field(name="Owner", value=owner_name, inline=True)
+            embed.add_field(name="Users", value=f"{len(ch.members)}/{ch.user_limit or '∞'}", inline=True)
+            embed.add_field(name="Privacy", value=record["privacy"].title(), inline=True)
+            embed.add_field(name="Created", value=created, inline=False)
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as e:
+            print(f"[TEMP VOICE] tv_info error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f":x: {e}", ephemeral=True)
 
     @discord.ui.button(label="Reset", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="tvif_reset")
     async def tv_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
-        config = _get_creator_config(record["creator_id"])
-        default_name = config["name_format"] if config else f"{interaction.user.display_name}s Channel"
-        default_name = _format_temp_channel_name(default_name, interaction.user, 0)
         try:
+            await interaction.response.defer(ephemeral=True)
+            record, ch, err = _check_owner(interaction, self.target_channel_id)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
+            config = _get_creator_config(record["creator_id"])
+            default_name = config["name_format"] if config else f"{interaction.user.display_name}s Channel"
+            default_name = _format_temp_channel_name(default_name, interaction.user, 0)
             await ch.edit(name=default_name, user_limit=0)
             await _apply_privacy(ch, "public")
             _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"],
                                name=default_name, user_limit=0, privacy="public")
-            await interaction.response.send_message(f":white_check_mark: Reset to defaults.", ephemeral=True)
+            await interaction.followup.send(":white_check_mark: Reset to defaults.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+            print(f"[TEMP VOICE] tv_reset error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f":x: {e}", ephemeral=True)
 
     @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="tvif_delete")
     async def tv_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
-        record, ch, err = _check_owner(interaction, self.target_channel_id)
-        if err:
-            await interaction.response.send_message(err, ephemeral=True)
-            return
         try:
+            await interaction.response.defer(ephemeral=True)
+            record, ch, err = _check_owner(interaction, self.target_channel_id)
+            if err:
+                await interaction.followup.send(err, ephemeral=True)
+                return
             _remove_temp_channel(ch.id)
             await ch.delete(reason=f"TempVoice: Deleted by owner {interaction.user}")
-            await interaction.response.send_message(":white_check_mark: Channel deleted.", ephemeral=True)
+            await interaction.followup.send(":white_check_mark: Channel deleted.", ephemeral=True)
         except Exception as e:
-            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+            print(f"[TEMP VOICE] tv_delete error: {e}")
+            if not interaction.response.is_done():
+                await interaction.response.send_message(f":x: {e}", ephemeral=True)
+            else:
+                await interaction.followup.send(f":x: {e}", ephemeral=True)
 
 
 # Modals for the interface
