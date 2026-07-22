@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
+import wavelink
 
 load_dotenv()
 
@@ -71,7 +72,7 @@ def add_to_history(channel_id: int, role: str, content: str):
 
 CHAT_CAPABILITIES = """
 MY CAPABILITIES:
-- Play music from YouTube: use /play <song name>. Also /skip /stop /queue /pause /resume.
+- Play music: /play <song name>, /play <YouTube URL>. Also /skip /stop /queue /pause /resume /volume.
 - Generate ANY file: /lua, /script, /file, or just say "make me a .file type..."
 - Create .exe source with compile instructions
 - Read & summarize channels: /read #channel
@@ -349,14 +350,33 @@ class CodeBot(commands.Bot):
 
     async def setup_hook(self):
         await self.tree.sync()
+        nodes = [
+            wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
+            wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
+            wavelink.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
+            wavelink.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
+            wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud"),
+        ]
+        for node in nodes:
+            try:
+                await wavelink.Pool.connect(nodes=[node], client=self)
+                print(f"Wavelink connected: {node.uri}")
+                break
+            except Exception as e:
+                print(f"Wavelink failed {node.uri}: {e}")
+        else:
+            print("WARNING: Could not connect to any public Lavalink node.")
 
     async def on_ready(self):
         activity = discord.Activity(
             type=discord.ActivityType.watching,
-            name="for /lua or @Null",
+            name="for /play or /lua",
         )
         await self.change_presence(activity=activity, status=discord.Status.online)
         print(f"Online as {self.user}")
+
+    async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
+        print(f"Lavalink node ready: {payload.node.uri}")
 
 
 bot = CodeBot()
@@ -616,49 +636,35 @@ async def slash_voice(interaction: discord.Interaction):
     info = get_voice_info(interaction.guild)
     await interaction.response.send_message(f":loud_sound: **Voice channels:**\n{info}")
 
-RADIO_STATIONS = {
-    "lofi": "https://stream.radioparadise.com/mellow-128",
-    "rock": "https://stream.radioparadise.com/rock-128",
-    "pop": "https://stream.radioparadise.com/main-128",
-    "edm": "https://stream.radioparadise.com/dance-128",
-    "classical": "https://stream.radioparadise.com/classical-128",
-    "chill": "https://stream.radioparadise.com/mellow-128",
-    "hiphop": "https://stream.radioparadise.com/hiphop-128",
-    "jazz": "https://jazzradio.ice.infomaniak.ch/jazzradio-high.mp3",
-    "blues": "https://stream.radioparadise.com/blues-128",
-    "country": "https://stream.radioparadise.com/country-128",
-    "metal": "https://stream.radioparadise.com/metal-128",
-    "reggae": "https://stream.radioparadise.com/reggae-128",
-    "indie": "https://stream.radioparadise.com/indie-128",
-    "ambient": "https://stream.radioparadise.com/ambient-128",
-    "world": "https://stream.radioparadise.com/world-128",
-    "80s": "https://stream.radioparadise.com/80s-128",
-    "90s": "https://stream.radioparadise.com/90s-128",
-    "anime": "https://listen.moe/stream",
-}
-
-PIPED_INSTANCES = [
-    "https://api.piped.private.coffee",
-]
-
-@bot.tree.command(name="radio", description="Play radio: lofi rock pop edm classical chill hiphop jazz + more")
-@app_commands.describe(station="Station name or URL")
+@bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm)")
+@app_commands.describe(station="Station name or stream URL")
 async def slash_radio(interaction: discord.Interaction, station: str):
     if not interaction.user.voice:
         await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
         return
+
     await interaction.response.defer()
     voice = interaction.user.voice.channel
     voice_client = interaction.guild.voice_client
-    url = RADIO_STATIONS.get(station.lower())
-    if not url:
-        stations = ", ".join(RADIO_STATIONS.keys())
-        await interaction.followup.send(f":x: Unknown. Try: {stations}")
+
+    radio_urls = {
+        "lofi": "https://play.zenfm.audio/1lsmRbBhWUZtzz",
+        "jazz": "https://jazzradio.ice.infomaniak.ch/jazzradio-high.mp3",
+        "rock": "https://stream.radioparadise.com/rock-128",
+        "chill": "https://stream.radioparadise.com/mellow-128",
+        "pop": "https://stream.radioparadise.com/main-128",
+        "edm": "https://stream.radioparadise.com/dance-128",
+    }
+    url = radio_urls.get(station.lower(), station)
+    if not url.startswith("http"):
+        await interaction.followup.send(":x: Unknown station. Try: lofi, jazz, rock, chill, pop, edm, or paste a stream URL.")
         return
+
     if not voice_client:
         voice_client = await voice.connect()
     elif voice_client.channel != voice:
         await voice_client.move_to(voice)
+
     try:
         source = discord.PCMVolumeTransformer(
             discord.FFmpegPCMAudio(url, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
@@ -676,6 +682,117 @@ async def slash_stopradio(interaction: discord.Interaction):
         vc.stop()
         await vc.disconnect()
     await interaction.response.send_message(":stop_button: Stopped.")
+
+
+@bot.tree.command(name="play", description="Play a song from YouTube or search by name")
+@app_commands.describe(query="Song name or YouTube URL")
+async def slash_play(interaction: discord.Interaction, query: str):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    if not interaction.user.voice:
+        await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
+        return
+    await interaction.response.defer()
+
+    voice = interaction.user.voice.channel
+    player = interaction.guild.voice_client
+    if not player:
+        try:
+            player = await voice.connect(cls=wavelink.Player)
+        except Exception as e:
+            await interaction.followup.send(f":x: Could not join voice: {e}")
+            return
+    elif player.channel != voice:
+        await player.move_to(voice)
+
+    if not hasattr(player, "home"):
+        player.home = interaction.channel
+    elif player.home != interaction.channel:
+        await interaction.followup.send(f"Player is locked to {player.home.mention}.")
+        return
+
+    try:
+        tracks: wavelink.Search = await wavelink.Playable.search(query)
+        if not tracks:
+            await interaction.followup.send(":x: No tracks found.")
+            return
+        if isinstance(tracks, wavelink.Playlist):
+            added = await player.queue.put_wait(tracks)
+            await interaction.followup.send(f":cd: Added playlist `{tracks.name}` ({added} tracks)")
+        else:
+            track = tracks[0]
+            await player.queue.put_wait(track)
+            await interaction.followup.send(f":musical_note: Added `{track.title}` by `{track.author}` to the queue.")
+        if not player.playing:
+            await player.play(player.queue.get(), volume=100)
+    except Exception as e:
+        await interaction.followup.send(f":x: Play error: {e}")
+
+
+@bot.tree.command(name="skip", description="Skip the current song")
+async def slash_skip(interaction: discord.Interaction):
+    player = interaction.guild.voice_client if interaction.guild else None
+    if not player or not player.playing:
+        await interaction.response.send_message(":x: Nothing is playing.", ephemeral=True)
+        return
+    await player.skip(force=True)
+    await interaction.response.send_message(":track_next: Skipped.")
+
+
+@bot.tree.command(name="pause", description="Pause the music")
+async def slash_pause(interaction: discord.Interaction):
+    player = interaction.guild.voice_client if interaction.guild else None
+    if not player:
+        await interaction.response.send_message(":x: Not in voice.", ephemeral=True)
+        return
+    await player.pause(True)
+    await interaction.response.send_message(":pause_button: Paused.")
+
+
+@bot.tree.command(name="resume", description="Resume the music")
+async def slash_resume(interaction: discord.Interaction):
+    player = interaction.guild.voice_client if interaction.guild else None
+    if not player:
+        await interaction.response.send_message(":x: Not in voice.", ephemeral=True)
+        return
+    await player.pause(False)
+    await interaction.response.send_message(":arrow_forward: Resumed.")
+
+
+@bot.tree.command(name="stop", description="Stop music and leave voice")
+async def slash_stop(interaction: discord.Interaction):
+    player = interaction.guild.voice_client if interaction.guild else None
+    if not player:
+        await interaction.response.send_message(":x: Not in voice.", ephemeral=True)
+        return
+    await player.disconnect()
+    await interaction.response.send_message(":stop_button: Stopped and left.")
+
+
+@bot.tree.command(name="queue", description="Show the current music queue")
+async def slash_queue(interaction: discord.Interaction):
+    player = interaction.guild.voice_client if interaction.guild else None
+    if not player:
+        await interaction.response.send_message(":x: Not in voice.", ephemeral=True)
+        return
+    if not player.queue:
+        await interaction.response.send_message(":x: Queue is empty.")
+        return
+    lines = [f"{i+1}. `{t.title}` by `{t.author}" for i, t in enumerate(player.queue[:20])]
+    await interaction.response.send_message(f":scroll: **Queue:**\n" + "\n".join(lines))
+
+
+@bot.tree.command(name="volume", description="Set music volume (0-100)")
+@app_commands.describe(level="Volume level")
+async def slash_volume(interaction: discord.Interaction, level: int):
+    player = interaction.guild.voice_client if interaction.guild else None
+    if not player:
+        await interaction.response.send_message(":x: Not in voice.", ephemeral=True)
+        return
+    level = max(0, min(100, level))
+    await player.set_volume(level * 10)
+    await interaction.response.send_message(f":sound: Volume set to {level}%.")
 
 
 bot.run(TOKEN)
