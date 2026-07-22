@@ -327,12 +327,39 @@ CREATE TABLE IF NOT EXISTS xp_multipliers (
 );
 """
 
+PG_MIGRATION_SCRIPT = """
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='levels' AND column_name='guild_id' AND data_type='integer') THEN
+        ALTER TABLE levels ALTER COLUMN guild_id TYPE BIGINT;
+        ALTER TABLE levels ALTER COLUMN user_id TYPE BIGINT;
+        ALTER TABLE levels ALTER COLUMN xp TYPE BIGINT;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='level_settings' AND column_name='guild_id' AND data_type='integer') THEN
+        ALTER TABLE level_settings ALTER COLUMN guild_id TYPE BIGINT;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='role_rewards' AND column_name='guild_id' AND data_type='integer') THEN
+        ALTER TABLE role_rewards ALTER COLUMN guild_id TYPE BIGINT;
+        ALTER TABLE role_rewards ALTER COLUMN role_id TYPE BIGINT;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='xp_blacklist' AND column_name='guild_id' AND data_type='integer') THEN
+        ALTER TABLE xp_blacklist ALTER COLUMN guild_id TYPE BIGINT;
+        ALTER TABLE xp_blacklist ALTER COLUMN target_id TYPE BIGINT;
+    END IF;
+    IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='xp_multipliers' AND column_name='guild_id' AND data_type='integer') THEN
+        ALTER TABLE xp_multipliers ALTER COLUMN guild_id TYPE BIGINT;
+        ALTER TABLE xp_multipliers ALTER COLUMN target_id TYPE BIGINT;
+    END IF;
+END $$;
+"""
+
 
 def get_db():
     if USE_POSTGRES and psycopg2:
         conn = psycopg2.connect(DATABASE_URL)
         wrapper = _PostgresConnection(conn)
         wrapper.executescript(SCHEMA_SCRIPT)
+        wrapper.executescript(PG_MIGRATION_SCRIPT)
         wrapper.commit()
         return wrapper
     conn = sqlite3.connect(DB_PATH)
