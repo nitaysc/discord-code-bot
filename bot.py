@@ -75,14 +75,20 @@ else:
 
 
 def _search_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
-    try:
-        results = list(DDGS().text(query, max_results=max_results))
-        if not results:
-            results = list(DDGS().news(query, max_results=max_results))
-        return results
-    except Exception as e:
-        print(f"DuckDuckGo search error: {e}")
-        return []
+    last_err = None
+    for attempt in range(3):
+        try:
+            results = list(DDGS().text(query, max_results=max_results))
+            if not results:
+                results = list(DDGS().news(query, max_results=max_results))
+            if results:
+                return results
+        except Exception as e:
+            last_err = e
+            print(f"DuckDuckGo attempt {attempt+1} error: {e}")
+        import time; time.sleep(1)
+    print(f"DuckDuckGo search failed after retries: {last_err}")
+    return []
 
 
 async def _search_serpapi(query: str, api_key: str, max_results: int = 5) -> list[dict]:
@@ -2289,11 +2295,8 @@ async def answer_with_web_search_if_needed(
                 f"Use the above search results as the authoritative source."
             )
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
-        return (
-            "I searched online but couldn't find current results right now. "
-            "Free web search may be blocked on this host. "
-            "For reliable real-time info, add a search API key: SERPAPI_API_KEY, BING_API_KEY, or BRAVE_API_KEY."
-        )
+        print("[SEARCH] all backends failed - answering from AI knowledge only")
+        return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
     return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
 
 
