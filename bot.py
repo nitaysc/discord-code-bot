@@ -677,25 +677,16 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
         tmp = tempfile.NamedTemporaryFile(suffix=".webm", delete=False)
         tmp.close()
 
-        dl_url = song["url"]
-        if "youtube.com" in dl_url or "youtu.be" in dl_url:
-            vid_match = re.search(r'(?:v=|youtu\.be/)([a-zA-Z0-9_-]{11})', dl_url)
-            if vid_match:
-                dl_url = f"{INVIDIOUS}/watch?v={vid_match.group(1)}"
-
-        ytdl_cmd = [
-            sys.executable, "-m", "yt_dlp", dl_url,
-            "-f", "bestaudio/best",
-            "-o", tmp.name,
-            "-q", "--no-warnings",
-        ]
-        if dl_url.startswith("http"):
-            pass
-        else:
-            ytdl_cmd += ["--default-search", "ytsearch"]
-        result = subprocess.run(ytdl_cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "yt-dlp failed")
+        dl_opts = {
+            "format": "bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "outtmpl": tmp.name,
+            "default_search": "ytsearch",
+            "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["android"]}},
+        }
+        with yt_dlp.YoutubeDL(dl_opts) as ydl:
+            ydl.download([song["url"]])
         source = discord.PCMVolumeTransformer(
             discord.FFmpegPCMAudio(tmp.name, options="-vn")
         )
