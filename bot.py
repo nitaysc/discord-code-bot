@@ -994,7 +994,10 @@ class ConfirmCloseView(discord.ui.View):
         channel = interaction.channel
         ticket = await asyncio.to_thread(_get_ticket_by_channel, channel.id)
         if not ticket:
-            await interaction.followup.send(":x: Ticket not found.", ephemeral=True)
+            try:
+                await interaction.followup.send(":x: Ticket not found.", ephemeral=True)
+            except Exception:
+                pass
             return
         settings = await asyncio.to_thread(_get_ticket_settings, interaction.guild.id)
         transcript = ""
