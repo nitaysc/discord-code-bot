@@ -5,6 +5,7 @@ import tempfile
 import textwrap
 
 import discord
+from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
@@ -13,7 +14,7 @@ load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL = os.getenv("OPENROUTER_MODEL", "google/gemini-2.5-flash-lite:free")
+MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
 
 if not TOKEN or not OPENROUTER_KEY:
     raise RuntimeError("Missing DISCORD_TOKEN or OPENROUTER_API_KEY in .env file")
@@ -28,39 +29,38 @@ client = OpenAI(
 )
 
 EXTENSIONS = {
-    "lua": ".lua",
-    "luau": ".luau",
-    "python": ".py",
-    "py": ".py",
-    "javascript": ".js",
-    "js": ".js",
-    "typescript": ".ts",
-    "ts": ".ts",
-    "html": ".html",
-    "css": ".css",
-    "c": ".c",
-    "cpp": ".cpp",
-    "c++": ".cpp",
-    "csharp": ".cs",
-    "cs": ".cs",
-    "java": ".java",
-    "go": ".go",
-    "rust": ".rs",
-    "ruby": ".rb",
-    "php": ".php",
-    "swift": ".swift",
-    "kotlin": ".kt",
-    "sql": ".sql",
-    "shell": ".sh",
-    "bash": ".sh",
-    "powershell": ".ps1",
-    "ps1": ".ps1",
-    "json": ".json",
-    "yaml": ".yml",
-    "xml": ".xml",
-    "markdown": ".md",
-    "md": ".md",
+    "lua": ".lua", "luau": ".luau", "python": ".py", "py": ".py",
+    "javascript": ".js", "js": ".js", "typescript": ".ts", "ts": ".ts",
+    "html": ".html", "css": ".css", "c": ".c", "cpp": ".cpp", "c++": ".cpp",
+    "csharp": ".cs", "cs": ".cs", "java": ".java", "go": ".go", "rust": ".rs",
+    "ruby": ".rb", "php": ".php", "swift": ".swift", "kotlin": ".kt",
+    "sql": ".sql", "shell": ".sh", "bash": ".sh", "powershell": ".ps1",
+    "ps1": ".ps1", "json": ".json", "yaml": ".yml", "xml": ".xml",
+    "markdown": ".md", "md": ".md",
 }
+
+CODE_KEYWORDS = [
+    "make", "create", "write", "code", "script", "generate", "build",
+    "lua", "luau", "roblox", "script", "program", "function", "class",
+]
+
+CHAT_SYSTEM = textwrap.dedent("""\
+You are Null, a friendly and helpful coding assistant in a Discord server.
+Your personality is chill, concise, and slightly cool.
+
+Rules:
+1. If the user asks you to write code, output the code in a code block with the language tag. Include a brief one-line explanation before the block.
+2. If the user is just chatting, reply conversationally. Keep it short.
+3. Always use proper syntax and follow best practices.
+4. If you don't know something, be honest.
+5. Respond in the same language the user speaks.
+""")
+
+CODE_SYSTEM = textwrap.dedent("""\
+You are a coding assistant. Write code based on the user's request.
+Output ONLY the code in a code block. No explanations.
+Follow best practices and proper syntax.
+""")
 
 
 def extract_code_blocks(text: str) -> list[tuple[str | None, str]]:
@@ -71,7 +71,7 @@ def extract_code_blocks(text: str) -> list[tuple[str | None, str]]:
 
 def detect_language(text: str) -> str | None:
     text_lower = text.lower()
-    if "lua" in text_lower or "luau" in text_lower or "roblox" in text_lower:
+    if any(w in text_lower for w in ["lua", "luau", "roblox"]):
         return "lua"
     for lang in EXTENSIONS:
         if lang in text_lower:
@@ -79,61 +79,9 @@ def detect_language(text: str) -> str | None:
     return None
 
 
-SYSTEM_PROMPT = textwrap.dedent("""\
-You are a coding assistant bot in a Discord server. A user will ask you to write code.
-Follow these rules:
-
-1. Output ONLY the code inside a single code block with the language specified. Example:
-```lua
--- code here
-```
-
-2. Do NOT include explanations, summaries, or commentary outside the code block.
-3. If the user asks a non-coding question, answer briefly.
-4. Always use proper syntax and follow best practices for the language.
-5. If you don't know, say so honestly.
-""")
-
-
-intents = discord.Intents.default()
-intents.message_content = True
-intents.members = False
-intents.presences = False
-bot = commands.Bot(command_prefix="!", intents=intents)
-
-
-@bot.event
-async def on_ready():
-    activity = discord.Activity(
-        type=discord.ActivityType.playing,
-        name="with Lua scripts",
-    )
-    await bot.change_presence(
-        activity=activity,
-        status=discord.Status.online,
-    )
-    print(f"Online as {bot.user}")
-
-
-def _generate_code_sync(prompt: str, language: str | None) -> str:
-    lang_hint = f" in {language}" if language else ""
-    full_prompt = f"Write code{lang_hint} for the following request. Output ONLY the code in a code block. No explanations.\n\n{prompt}"
-
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": full_prompt},
-        ],
-        temperature=0.3,
-        max_tokens=4096,
-    )
-
-    return response.choices[0].message.content or ""
-
-
-async def generate_code(prompt: str, language: str | None) -> str:
-    return await asyncio.to_thread(_generate_code_sync, prompt, language)
+def is_code_request(text: str) -> bool:
+    text_lower = text.lower()
+    return any(kw in text_lower for kw in CODE_KEYWORDS)
 
 
 def choose_filename(lang: str | None, content: str) -> str:
@@ -143,102 +91,216 @@ def choose_filename(lang: str | None, content: str) -> str:
     return f"{safe}{ext}"
 
 
-@bot.command(name="script")
-async def script(ctx: commands.Context, *, args: str):
-    """Generate code and send as a downloadable file. Usage: !script <language> <description>"""
-    parts = args.strip().split(maxsplit=1)
-    lang = None
-    description = args.strip()
-
-    if len(parts) >= 2 and parts[0].lower() in EXTENSIONS:
-        lang = parts[0].lower()
-        description = parts[1]
-    else:
-        lang = detect_language(description)
-
-    lang_display = lang or "code"
-    await ctx.send(f":white_check_mark: Generating {lang_display}...")
-
-    async with ctx.typing():
-        try:
-            response_text = await generate_code(description, lang)
-        except Exception as e:
-            await ctx.send(f":x: API error: {e}")
-            return
-
-    code_blocks = extract_code_blocks(response_text)
-
-    if code_blocks:
-        for i, (block_lang, code) in enumerate(code_blocks):
-            final_lang = block_lang or lang
-            filename = choose_filename(final_lang, code)
-
-            tmp = tempfile.NamedTemporaryFile(
-                mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
-            )
-            tmp.write(code)
-            tmp.close()
-
-            ext = EXTENSIONS.get(final_lang, ".txt") if final_lang else ".txt"
-            await ctx.send(
-                f":package: **File {i + 1}:** `{filename}`",
-                file=discord.File(tmp.name, filename=filename),
-            )
-            os.unlink(tmp.name)
-
-        return
-
-    lang_for_filename = lang or detect_language(response_text)
-    filename = choose_filename(lang_for_filename, response_text)
-
-    tmp = tempfile.NamedTemporaryFile(
-        mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
-    )
-    tmp.write(response_text)
-    tmp.close()
-
-    await ctx.send(
-        f":package: `{filename}`",
-        file=discord.File(tmp.name, filename=filename),
-    )
-    os.unlink(tmp.name)
+async def send_code_files(channel, code_blocks, lang_hint=None):
+    for i, (block_lang, code) in enumerate(code_blocks):
+        final_lang = block_lang or lang_hint
+        filename = choose_filename(final_lang, code)
+        tmp = tempfile.NamedTemporaryFile(
+            mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+        )
+        tmp.write(code)
+        tmp.close()
+        await channel.send(
+            f":package: `{filename}`",
+            file=discord.File(tmp.name, filename=filename),
+        )
+        os.unlink(tmp.name)
 
 
-@bot.command(name="lua")
-async def lua(ctx: commands.Context, *, description: str):
-    """Generate a Lua script and send as a downloadable file. Usage: !lua <description>"""
-    await script(ctx, args=f"lua {description}")
-
-
-def _ask_sync(question: str) -> str:
+def _call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int = 4096) -> str:
     response = client.chat.completions.create(
         model=MODEL,
         messages=[
-            {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
-            {"role": "user", "content": question},
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt},
         ],
-        temperature=0.7,
-        max_tokens=2048,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
-    return response.choices[0].message.content or "No response."
+    return response.choices[0].message.content or ""
 
 
-@bot.command(name="ask")
-async def ask(ctx: commands.Context, *, question: str):
-    """Ask the AI a general question. Usage: !ask <question>"""
-    async with ctx.typing():
-        try:
-            answer = await asyncio.to_thread(_ask_sync, question)
-        except Exception as e:
-            await ctx.send(f":x: Error: {e}")
-            return
+async def call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens: int = 4096) -> str:
+    return await asyncio.to_thread(_call_ai, system, prompt, temperature, max_tokens)
 
-    if len(answer) > 1900:
-        parts = [answer[i:i + 1900] for i in range(0, len(answer), 1900)]
-        for part in parts:
-            await ctx.send(part)
-    else:
-        await ctx.send(answer)
+
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = False
+intents.presences = False
+
+
+class CodeBot(commands.Bot):
+    def __init__(self):
+        super().__init__(command_prefix="!", intents=intents)
+
+    async def setup_hook(self):
+        await self.tree.sync()
+
+    async def on_ready(self):
+        activity = discord.Activity(
+            type=discord.ActivityType.watching,
+            name="for /lua or @Null",
+        )
+        await self.change_presence(activity=activity, status=discord.Status.online)
+        print(f"Online as {self.user}")
+
+
+bot = CodeBot()
+
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+
+    is_mention = bot.user in message.mentions
+    is_dm = isinstance(message.channel, discord.DMChannel)
+
+    if is_mention or is_dm:
+        content = message.content
+        for m in message.mentions:
+            content = content.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
+        content = content.strip()
+
+        if not content:
+            content = "hey"
+
+        async with message.channel.typing():
+            try:
+                if is_code_request(content):
+                    lang = detect_language(content)
+                    text = await call_ai(CODE_SYSTEM, content, temperature=0.2)
+                    code_blocks = extract_code_blocks(text)
+                    if code_blocks:
+                        await send_code_files(message.channel, code_blocks, lang)
+                    else:
+                        filename = choose_filename(lang, text)
+                        tmp = tempfile.NamedTemporaryFile(
+                            mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+                        )
+                        tmp.write(text)
+                        tmp.close()
+                        await message.reply(
+                            f":package: `{filename}`",
+                            file=discord.File(tmp.name, filename=filename),
+                        )
+                        os.unlink(tmp.name)
+                else:
+                    answer = await call_ai(CHAT_SYSTEM, content, temperature=0.7)
+                    code_blocks = extract_code_blocks(answer)
+                    await message.reply(answer, mention_author=False)
+                    if code_blocks:
+                        await send_code_files(message.channel, code_blocks)
+            except Exception as e:
+                await message.reply(f":x: Error: {e}", mention_author=False)
+        return
+
+    await bot.process_commands(message)
+
+
+@bot.tree.command(name="hey", description="Chat freely with Null")
+async def slash_hey(interaction: discord.Interaction, message: str):
+    await interaction.response.defer()
+    try:
+        if is_code_request(message):
+            lang = detect_language(message)
+            text = await call_ai(CODE_SYSTEM, message, temperature=0.2)
+            code_blocks = extract_code_blocks(text)
+            if code_blocks:
+                await interaction.followup.send(
+                    ":white_check_mark: Here's your code:"
+                )
+                await send_code_files(interaction.channel, code_blocks, lang)
+            else:
+                filename = choose_filename(lang, text)
+                tmp = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+                )
+                tmp.write(text)
+                tmp.close()
+                await interaction.followup.send(
+                    f":package: `{filename}`",
+                    file=discord.File(tmp.name, filename=filename),
+                )
+                os.unlink(tmp.name)
+        else:
+            answer = await call_ai(CHAT_SYSTEM, message, temperature=0.7)
+            code_blocks = extract_code_blocks(answer)
+            await interaction.followup.send(answer)
+            if code_blocks:
+                await send_code_files(interaction.channel, code_blocks)
+    except Exception as e:
+        await interaction.followup.send(f":x: Error: {e}")
+
+
+@bot.tree.command(name="lua", description="Generate a Lua/Roblox script")
+async def slash_lua(interaction: discord.Interaction, description: str):
+    await interaction.response.defer()
+    try:
+        prompt = f"Write a Lua script for Roblox that: {description}"
+        text = await call_ai(CODE_SYSTEM, prompt, temperature=0.2)
+        code_blocks = extract_code_blocks(text)
+        if code_blocks:
+            await interaction.followup.send(":white_check_mark: Here's your Lua script:")
+            await send_code_files(interaction.channel, code_blocks, "lua")
+        else:
+            filename = choose_filename("lua", text)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+            )
+            tmp.write(text)
+            tmp.close()
+            await interaction.followup.send(
+                f":package: `{filename}`",
+                file=discord.File(tmp.name, filename=filename),
+            )
+            os.unlink(tmp.name)
+    except Exception as e:
+        await interaction.followup.send(f":x: Error: {e}")
+
+
+@bot.tree.command(name="script", description="Generate code in any language")
+async def slash_script(interaction: discord.Interaction, language: str, description: str):
+    await interaction.response.defer()
+    lang = language.lower()
+    if lang not in EXTENSIONS:
+        await interaction.followup.send(f":x: Unknown language. Try: lua, python, js, etc.")
+        return
+    try:
+        prompt = f"Write a {language} script that: {description}"
+        text = await call_ai(CODE_SYSTEM, prompt, temperature=0.2)
+        code_blocks = extract_code_blocks(text)
+        if code_blocks:
+            await interaction.followup.send(f":white_check_mark: Here's your {language} code:")
+            await send_code_files(interaction.channel, code_blocks, lang)
+        else:
+            filename = choose_filename(lang, text)
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+            )
+            tmp.write(text)
+            tmp.close()
+            await interaction.followup.send(
+                f":package: `{filename}`",
+                file=discord.File(tmp.name, filename=filename),
+            )
+            os.unlink(tmp.name)
+    except Exception as e:
+        await interaction.followup.send(f":x: Error: {e}")
+
+
+@bot.tree.command(name="ask", description="Ask Null a question")
+async def slash_ask(interaction: discord.Interaction, question: str):
+    await interaction.response.defer()
+    try:
+        answer = await call_ai(CHAT_SYSTEM, question, temperature=0.7)
+        code_blocks = extract_code_blocks(answer)
+        await interaction.followup.send(answer)
+        if code_blocks:
+            await send_code_files(interaction.channel, code_blocks)
+    except Exception as e:
+        await interaction.followup.send(f":x: Error: {e}")
 
 
 bot.run(TOKEN)
