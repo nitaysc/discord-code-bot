@@ -625,6 +625,8 @@ YTDL_OPTS = {
     "noplaylist": True,
     "default_search": "ytsearch",
     "extract_flat": False,
+    "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
+    "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
 }
 
 FFMPEG_OPTS = {
