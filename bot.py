@@ -4475,23 +4475,22 @@ PRIVACY_EMOJIS = {"public": "🔓", "locked": "🔒", "hidden": "😎"}
 
 
 async def _send_temp_interface(target_channel: discord.VoiceChannel, owner: discord.Member):
-    """Send the control interface to the voice channel's text chat."""
+    """Send the control interface to the voice channel's chat."""
     record = _get_temp_channel(target_channel.id)
     if not record:
         return
     try:
-        txt = target_channel.guild.get_channel(target_channel.id)
-        if txt and isinstance(txt, discord.TextChannel):
-            embed = discord.Embed(
-                title=f"🎧 {target_channel.name} — Controls",
-                description=f"Owner: {owner.mention}\nUse the buttons below to manage your channel.",
-                color=0x2b2d31,
-            )
-            embed.set_footer(text="TempVoice • You're the owner")
-            view = TempVoiceInterface(target_channel.id, record.get("privacy", "public"))
-            await txt.send(embed=embed, view=view)
-    except Exception:
-        pass
+        embed = discord.Embed(
+            title=f"🎧 {target_channel.name} — Controls",
+            description=f"Owner: {owner.mention}\nUse the buttons below to manage your channel.",
+            color=0x2b2d31,
+        )
+        embed.set_footer(text="TempVoice • You're the owner")
+        view = TempVoiceInterface(target_channel.id, record.get("privacy", "public"))
+        await target_channel.send(embed=embed, view=view)
+        print(f"[TEMP VOICE] Sent control interface for {target_channel.name}")
+    except Exception as e:
+        print(f"[TEMP VOICE] Failed to send interface: {e}")
 
 
 def _toggle_privacy(current: str) -> str:
