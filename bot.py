@@ -18,17 +18,23 @@ load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
 CLOUDFLARE_KEY = os.getenv("CLOUDFLARE_API_KEY")
 CLOUDFLARE_ACCOUNT = os.getenv("CLOUDFLARE_ACCOUNT_ID")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
-AI_KEY = OPENROUTER_KEY or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("AI_MODEL", "google/gemma-4-31b-it:free")
+AI_KEY = GITHUB_TOKEN or OPENROUTER_KEY or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
 if not TOKEN or not AI_KEY:
     raise RuntimeError("Missing DISCORD_TOKEN or AI API key in .env file")
 
-if OPENROUTER_KEY:
+if GITHUB_TOKEN:
+    client = OpenAI(
+        base_url="https://models.inference.ai.azure.com",
+        api_key=GITHUB_TOKEN,
+    )
+elif OPENROUTER_KEY:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
