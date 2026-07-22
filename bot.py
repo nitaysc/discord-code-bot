@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import tempfile
@@ -114,7 +115,7 @@ async def on_ready():
     print(f"Online as {bot.user}")
 
 
-async def generate_code(prompt: str, language: str | None) -> str:
+def _generate_code_sync(prompt: str, language: str | None) -> str:
     lang_hint = f" in {language}" if language else ""
     full_prompt = f"Write code{lang_hint} for the following request. Output ONLY the code in a code block. No explanations.\n\n{prompt}"
 
@@ -128,8 +129,11 @@ async def generate_code(prompt: str, language: str | None) -> str:
         max_tokens=4096,
     )
 
-    content = response.choices[0].message.content or ""
-    return content
+    return response.choices[0].message.content or ""
+
+
+async def generate_code(prompt: str, language: str | None) -> str:
+    return await asyncio.to_thread(_generate_code_sync, prompt, language)
 
 
 def choose_filename(lang: str | None, content: str) -> str:
@@ -206,21 +210,25 @@ async def lua(ctx: commands.Context, *, description: str):
     await script(ctx, args=f"lua {description}")
 
 
+def _ask_sync(question: str) -> str:
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=[
+            {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
+            {"role": "user", "content": question},
+        ],
+        temperature=0.7,
+        max_tokens=2048,
+    )
+    return response.choices[0].message.content or "No response."
+
+
 @bot.command(name="ask")
 async def ask(ctx: commands.Context, *, question: str):
     """Ask the AI a general question. Usage: !ask <question>"""
     async with ctx.typing():
         try:
-            response = client.chat.completions.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a helpful assistant. Answer concisely."},
-                    {"role": "user", "content": question},
-                ],
-                temperature=0.7,
-                max_tokens=2048,
-            )
-            answer = response.choices[0].message.content or "No response."
+            answer = await asyncio.to_thread(_ask_sync, question)
         except Exception as e:
             await ctx.send(f":x: Error: {e}")
             return
