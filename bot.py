@@ -1,8 +1,6 @@
 import asyncio
 import os
 import re
-import subprocess
-import sys
 import tempfile
 import textwrap
 from collections import deque
@@ -12,7 +10,6 @@ from discord import app_commands
 from discord.ext import commands
 from dotenv import load_dotenv
 from openai import OpenAI
-import yt_dlp
 
 load_dotenv()
 
@@ -618,189 +615,6 @@ async def slash_voice(interaction: discord.Interaction):
         return
     info = get_voice_info(interaction.guild)
     await interaction.response.send_message(f":loud_sound: **Voice channels:**\n{info}")
-
-
-INVIDIOUS = "https://inv.nadeko.net"
-
-YTDL_OPTS = {
-    "format": "bestaudio/best",
-    "quiet": True,
-    "no_warnings": True,
-    "noplaylist": True,
-    "default_search": "ytsearch",
-    "extract_flat": "in_playlist",
-    "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["android"]}},
-}
-
-YTDL_DL_OPTS = {
-    "format": "bestaudio/best",
-    "quiet": True,
-    "no_warnings": True,
-}
-
-YTDL_STREAM_OPTS = {
-    "format": "bestaudio/best",
-    "quiet": True,
-    "no_warnings": True,
-    "output": "-",
-    "default_search": "ytsearch",
-}
-
-FFMPEG_OPTS = {
-    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn",
-}
-
-music_queues: dict[int, deque] = {}
-music_current: dict[int, dict] = {}
-
-
-def get_music_queue(guild_id: int) -> deque:
-    if guild_id not in music_queues:
-        music_queues[guild_id] = deque()
-    return music_queues[guild_id]
-
-
-async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
-    queue = get_music_queue(guild.id)
-    if not queue:
-        music_current.pop(guild.id, None)
-        await asyncio.sleep(120)
-        if guild.id not in music_current and voice_client.is_connected():
-            await voice_client.disconnect()
-        return
-
-    song = queue.popleft()
-    music_current[guild.id] = song
-
-    try:
-        tmp = tempfile.NamedTemporaryFile(suffix=".opus", delete=False)
-        tmp.close()
-
-        dl_opts = {
-            "format": "bestaudio",
-            "quiet": True,
-            "no_warnings": True,
-            "outtmpl": tmp.name,
-            "default_search": "ytsearch",
-            "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["ios", "web"]}},
-        }
-        with yt_dlp.YoutubeDL(dl_opts) as ydl:
-            ydl.download([song["url"]])
-        source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(tmp.name)
-        )
-        def after_play(error):
-            try:
-                os.unlink(tmp.name)
-            except Exception:
-                pass
-            asyncio.run_coroutine_threadsafe(play_next(guild, voice_client), bot.loop)
-        voice_client.play(source, after=after_play)
-    except Exception as e:
-        print(f"[MUSIC] Error: {e}")
-        await asyncio.sleep(0.5)
-        await play_next(guild, voice_client)
-
-
-@bot.tree.command(name="play", description="Play music from YouTube")
-@app_commands.describe(query="Song name or YouTube URL")
-async def slash_play(interaction: discord.Interaction, query: str):
-    if not interaction.user.voice:
-        await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
-        return
-
-    await interaction.response.defer()
-    voice = interaction.user.voice.channel
-    voice_client = interaction.guild.voice_client
-
-    if not voice_client:
-        voice_client = await voice.connect()
-    elif voice_client.channel != voice:
-        await voice_client.move_to(voice)
-
-    try:
-        with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-            info = ydl.extract_info(query, download=False)
-            if "entries" in info:
-                info = info["entries"][0]
-            title = info.get("title", "Unknown")
-            url = info.get("webpage_url") or info.get("url") or info.get("original_url") or query
-
-        if "youtube.com" not in url and "youtu.be" not in url:
-            vid = info.get("id")
-            if vid:
-                url = f"https://www.youtube.com/watch?v={vid}"
-
-        queue = get_music_queue(interaction.guild_id)
-        song = {"title": title, "url": url, "requester": interaction.user.display_name}
-        queue.append(song)
-
-        if not voice_client.is_playing() and interaction.guild_id not in music_current:
-            await play_next(interaction.guild, voice_client)
-            await interaction.followup.send(f":musical_note: Now playing: **{title}**")
-        else:
-            await interaction.followup.send(f":notes: Queued (#{len(queue)}): **{title}**")
-    except Exception as e:
-        await interaction.followup.send(f":x: Failed: {e}")
-
-
-@bot.tree.command(name="skip", description="Skip current song")
-async def slash_skip(interaction: discord.Interaction):
-    voice_client = interaction.guild.voice_client
-    if not voice_client or not voice_client.is_playing():
-        await interaction.response.send_message(":x: Nothing playing.", ephemeral=True)
-        return
-    voice_client.stop()
-    await interaction.response.send_message(":track_next: Skipped.")
-
-
-@bot.tree.command(name="stop", description="Stop music and leave voice")
-async def slash_stop(interaction: discord.Interaction):
-    voice_client = interaction.guild.voice_client
-    if voice_client:
-        music_queues.pop(interaction.guild_id, None)
-        music_current.pop(interaction.guild_id, None)
-        voice_client.stop()
-        await voice_client.disconnect()
-    await interaction.response.send_message(":stop_button: Stopped.")
-
-
-@bot.tree.command(name="queue", description="Show music queue")
-async def slash_queue(interaction: discord.Interaction):
-    queue = get_music_queue(interaction.guild_id)
-    current = music_current.get(interaction.guild_id)
-    lines = []
-    if current:
-        lines.append(f":musical_note: **Now**: {current['title']}")
-    if queue:
-        for i, song in enumerate(queue, 1):
-            lines.append(f"  #{i} {song['title']}")
-    if not lines:
-        await interaction.response.send_message(":x: Queue is empty.", ephemeral=True)
-    else:
-        await interaction.response.send_message("\n".join(lines))
-
-
-@bot.tree.command(name="pause", description="Pause music")
-async def slash_pause(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_playing():
-        vc.pause()
-        await interaction.response.send_message(":pause_button: Paused.")
-    else:
-        await interaction.response.send_message(":x: Nothing to pause.", ephemeral=True)
-
-
-@bot.tree.command(name="resume", description="Resume music")
-async def slash_resume(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_paused():
-        vc.resume()
-        await interaction.response.send_message(":arrow_forward: Resumed.")
-    else:
-        await interaction.response.send_message(":x: Nothing to resume.", ephemeral=True)
-
 
 @bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm)")
 @app_commands.describe(station="Station name or stream URL")
