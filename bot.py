@@ -673,7 +673,9 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
         title = song.get("title", "Unknown")
         song["title"] = title
 
-        source = discord.FFmpegOpusAudio.from_probe(audio_url, method="fallback")
+        source = discord.PCMVolumeTransformer(
+            discord.FFmpegPCMAudio(audio_url)
+        )
         voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
             play_next(guild, voice_client), bot.loop
         ))
