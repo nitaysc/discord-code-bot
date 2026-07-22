@@ -671,14 +671,14 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
             "-o", "-",
             "-q", "--no-warnings",
             "--default-search", "ytsearch",
-            "--audio-format", "mp3",
         ]
         proc = subprocess.Popen(ytdl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         source = discord.PCMVolumeTransformer(
             discord.FFmpegPCMAudio(
                 proc.stdout,
                 pipe=True,
-                before_options="-f mp3"
+                before_options="-nostdin",
+                options="-vn",
             )
         )
         voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
