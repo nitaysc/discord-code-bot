@@ -30,7 +30,7 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
 AI_KEY = GITHUB_TOKEN or OPENROUTER_KEY or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("AI_MODEL", os.getenv("GEMINI_MODEL", "gpt-4o-mini"))
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
@@ -225,6 +225,38 @@ async def get_valorant_matches(name: str, tag: str, region: str = "eu", limit: i
         return []
     matches = data.get("data", [])
     return matches[:limit]
+
+
+def _cache_valorant_profile(name: str, tag: str, region: str | None = None, account_level: int | None = None):
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            """INSERT INTO valorant_profiles (name, tag, region, account_level, last_seen)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(name, tag) DO UPDATE SET
+                 region=excluded.region,
+                 account_level=excluded.account_level,
+                 last_seen=excluded.last_seen""",
+            (name, tag, region, account_level, datetime.now(timezone.utc).timestamp()),
+        )
+        conn.commit()
+    except Exception as e:
+        print(f"[VALORANT CACHE] error caching profile: {e}")
+
+
+def _search_valorant_cache(name: str) -> list[tuple[str, str]]:
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT name, tag FROM valorant_profiles WHERE LOWER(name) LIKE LOWER(?) ORDER BY last_seen DESC LIMIT 25",
+            (f"%{name}%",),
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
+    except Exception as e:
+        print(f"[VALORANT CACHE] error searching cache: {e}")
+        return []
 
 
 VALORANT_REGIONS = ["na", "eu", "ap", "kr", "latam", "br"]
@@ -559,6 +591,41 @@ CREATE TABLE IF NOT EXISTS tickets (
     created_at REAL DEFAULT 0,
     closed_at REAL
 );
+CREATE TABLE IF NOT EXISTS valorant_profiles (
+    name TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    region TEXT,
+    account_level INTEGER,
+    last_seen REAL DEFAULT 0,
+    PRIMARY KEY (name, tag)
+);
+CREATE TABLE IF NOT EXISTS temp_voice_creators (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    name_format TEXT DEFAULT '{OWNER_USERNAME}s Channel',
+    user_limit INTEGER DEFAULT 0,
+    privacy_mode TEXT DEFAULT 'public',
+    category_id BIGINT,
+    PRIMARY KEY (guild_id, channel_id)
+);
+CREATE TABLE IF NOT EXISTS temp_voice_active (
+    channel_id BIGINT PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    owner_id BIGINT NOT NULL,
+    creator_id BIGINT NOT NULL,
+    created_at REAL DEFAULT 0,
+    name TEXT,
+    user_limit INTEGER DEFAULT 0,
+    privacy TEXT DEFAULT 'public'
+);
+CREATE TABLE IF NOT EXISTS temp_voice_prefs (
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    saved_name TEXT,
+    saved_limit INTEGER,
+    saved_privacy TEXT,
+    PRIMARY KEY (guild_id, user_id)
+);
 """
 
 SCHEMA_SCRIPT_POSTGRES = """
@@ -624,6 +691,41 @@ CREATE TABLE IF NOT EXISTS tickets (
     status TEXT DEFAULT 'open',
     created_at REAL DEFAULT 0,
     closed_at REAL
+);
+CREATE TABLE IF NOT EXISTS valorant_profiles (
+    name TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    region TEXT,
+    account_level INTEGER,
+    last_seen REAL DEFAULT 0,
+    PRIMARY KEY (name, tag)
+);
+CREATE TABLE IF NOT EXISTS temp_voice_creators (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    name_format TEXT DEFAULT '{OWNER_USERNAME}s Channel',
+    user_limit INTEGER DEFAULT 0,
+    privacy_mode TEXT DEFAULT 'public',
+    category_id BIGINT,
+    PRIMARY KEY (guild_id, channel_id)
+);
+CREATE TABLE IF NOT EXISTS temp_voice_active (
+    channel_id BIGINT PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    owner_id BIGINT NOT NULL,
+    creator_id BIGINT NOT NULL,
+    created_at REAL DEFAULT 0,
+    name TEXT,
+    user_limit INTEGER DEFAULT 0,
+    privacy TEXT DEFAULT 'public'
+);
+CREATE TABLE IF NOT EXISTS temp_voice_prefs (
+    guild_id BIGINT NOT NULL,
+    user_id BIGINT NOT NULL,
+    saved_name TEXT,
+    saved_limit INTEGER,
+    saved_privacy TEXT,
+    PRIMARY KEY (guild_id, user_id)
 );
 """
 
@@ -1868,51 +1970,55 @@ def add_to_history(channel_id: int, role: str, content: str):
     message_history[channel_id].append({"role": role, "content": content})
 
 CHAT_CAPABILITIES = """
-MY CAPABILITIES:
-- Play music: /play <song name>, /play <YouTube URL>. Also /skip /stop /queue /pause /resume /volume.
-- Search the web: /search <query>, or ask me anything and I will search if I need current info.
-- Leveling system: /rank, /leaderboard, XP for messages and voice, role rewards, multipliers, blacklists.
-- Generate ANY file: /lua, /script, /file, or just say "make me a .file type..."
-- Create .exe source with compile instructions
-- Read & summarize channels: /read #channel
-- See who's in voice: /voice or ask "who's in vc?"
-- Kick/ban/timeout/mute/voicemute/deafen users via chat (only if the requester has permission) or use /voicemute, /voiceunmute, /deafen, /undeafen
-- Create/delete channels, lock/unlock channels, set slowmode via chat (only if the requester has permission)
-- Add/remove roles, purge messages via chat (only if the requester has permission)
-- Ticket system: /ticketsetup, /ticketpanel, /ticket, /claim, /close, /addtoticket, /removefromticket
-- Normal chat, coding help, answering questions
-- See images: attach an image and ask about it
-- Read files: drop a .lua, .txt, .py, .json, or any text file and ask about it
-- Voice features coming soon (speech-to-text and text-to-speech)
-- Valorant tracker: /valorantsearch <name> (no tag needed), /valorant <name> <tag>, /valorantmmr <name> <tag> <region>
+WHAT I CAN DO:
+- /play, /skip, /stop, /queue, /pause, /resume, /volume — music from YouTube
+- /search or just ask — I'll search the web if I need current info
+- /rank, /leaderboard — XP for chatting and voice, role rewards, multipliers
+- /lua, /script, /file — generate any code or file (just say "make me a .py file...")
+- /read #channel — I'll summarize recent messages
+- /voice — see who's in vc right now
+- Admin stuff: kick/ban/timeout/mute/voicemute/deafen/create/delete/lock/unlock/slowmode/addrole/removerole/purge — just ask in chat
+- /ticket — ticket system with claims and transcripts
+- /valorantsearch, /valorant, /valorantmmr, /valorantmatches — Valorant stats
+- I see images you attach, I read text files you drop
 - I remember the last 50 messages in each channel
 
-I am a real Discord bot with real features. Never say "I can't" without checking my actual capabilities above.
+I'm a real bot with real features. If I say "I can't" and you know I can, call me out.
 """
 
 CHAT_SYSTEM = textwrap.dedent(f"""\
-You are Null, a friendly and capable Discord bot. You are chill, concise, and cool.
-Today's date: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.
+You're Null — a Discord bot that's actually cool to talk to. Quick, witty, helpful. No robotic vibes.
+Today: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.
 {CHAT_CAPABILITIES}
 
-Rules:
-- When someone asks if you can do something, check your capabilities FIRST before saying no.
-- Guide users to use the right /command for what they want.
-- For code/file requests, output the content and the system sends it as a downloadable file.
-- For vague questions like "what is this" or "what does this do" about a file you just sent, explain in text. Do NOT generate new code.
-- Do NOT output code blocks unless the user explicitly asked for code, a script, or a file.
-- For admin actions (kick, ban, timeout, mute, voicemute, voiceunmute, deafen, undeafen, create/delete channel, lock/unlock, slowmode, add/remove role, purge): you MUST execute them by putting an ACTION line at the end of your response. The system checks if the user has permission before running it.
-- Format admin actions like: ACTION: kick @user spam | ACTION: ban @user breaking rules | ACTION: timeout @user 1h spam | ACTION: mute @user spam | ACTION: voicemute @user spam | ACTION: voiceunmute @user | ACTION: deafen @user spam | ACTION: undeafen @user | ACTION: create channel #logs text | ACTION: delete channel #spam | ACTION: lock #general | ACTION: unlock #general | ACTION: slowmode #general 5 | ACTION: purge 10 | ACTION: addrole @user @Member | ACTION: removerole @user @Member
-- NEVER execute an admin action without an ACTION: line. The user must explicitly ask for the action.
-- If the user asks to mute/deafen someone in a voice channel, you MUST use ACTION: voicemute @user or ACTION: deafen @user. Do NOT say you can't do it.
-- If the user says "mute" without mentioning voice, use ACTION: mute @user (text timeout).
-- For ANY question about current events, recent news, sports results, today's date, future dates, or anything time-sensitive: you MUST rely on the web search results provided in the prompt, NOT your training data. Your training data has a cutoff and may be outdated.
-- If web search results are provided, use them as the authoritative source. Do not contradict them with your built-in knowledge.
-- If no search results are provided and the question is time-sensitive, say you don't have current info rather than guessing.
-- When server voice channel info is provided in the prompt, use it to answer questions about who is in a voice channel. Do NOT say you cannot see or do not know — the data is authoritative.
-- For Valorant stats, tell users to use /valorant or /valorantmmr with name and tag (e.g., /valorant TenZ #1). Do not guess stats.
-- Keep responses short and natural. Don't list all features unless asked.
-- Respond in the same language the user speaks.
+LANGUAGE RULES (IMPORTANT):
+- ALWAYS respond in the EXACT same language the user wrote to you in.
+- If they write in Hebrew (א-ת), respond in Hebrew. NEVER respond in Arabic (ا-ي) or any other language.
+- If they write in Arabic (ا-ي), respond in Arabic. NEVER respond in Hebrew.
+- If they write in English, respond in English.
+- These two languages look similar but are completely different. Pay close attention to the script.
+- When in doubt, match the user's exact language character by character.
+
+CODING & FILES:
+- For code/file requests ("make me a...", "write a script..."), output the code. The system will send it as a file automatically.
+- If someone asks "what is this" or "what does this do" about code you just sent, explain it in text. Don't generate new code.
+- Don't output code blocks unless the user asked for code.
+
+ADMIN ACTIONS (MUST follow this exactly):
+- When the user tells you to kick/ban/timeout/mute/voicemute/deafen/undeafen/create/delete/lock/unlock/slowmode/addrole/removerole/purge someone/something, put an ACTION: line at the end of your reply.
+- Format: ACTION: kick @user reason | ACTION: timeout @user 1h reason | ACTION: mute @user reason | ACTION: voicemute @user reason | ACTION: deafen @user reason | ACTION: create channel #name text | ACTION: lock #channel | ACTION: slowmode #channel 5 | ACTION: purge 10 | etc.
+- "mute" without "voice" = ACTION: mute @user (text timeout, 1h)
+- "mute" with "voice"/"vc" = ACTION: voicemute @user
+- NEVER run an action without an ACTION: line. The user has to ask first.
+
+FACTS & INFO:
+- If it's current events, news, sports, weather, dates — use the web search results I give you. Don't guess from old training data.
+- If I gave you search results, trust them over your built-in knowledge.
+- If no search results and it's time-sensitive, just say you don't have current info.
+- If I gave you voice channel data, use it to answer VC questions. Don't say "I can't see that."
+- For Valorant stats, direct them to /valorant or /valorantmmr with name+tag.
+- Keep it short and natural. Don't list all features unless they ask.
+- Be yourself. You're not a robot reading a script.
 """)
 
 CODE_SYSTEM = textwrap.dedent("""\
@@ -3222,8 +3328,8 @@ def get_voice_info(guild: discord.Guild) -> str:
     return "\n".join(vc_data)
 
 
-@bot.tree.command(name="voice", description="See who's in voice channels")
-async def slash_voice(interaction: discord.Interaction):
+@bot.tree.command(name="voicelist", description="See who's in voice channels")
+async def slash_voicelist(interaction: discord.Interaction):
     if not interaction.guild:
         await interaction.response.send_message(":x: Server only.", ephemeral=True)
         return
@@ -3647,6 +3753,1101 @@ async def slash_volume(interaction: discord.Interaction, level: int):
     level = max(0, min(100, level))
     await player.set_volume(level * 10)
     await interaction.response.send_message(f":sound: Volume set to {level}%.")
+
+
+# =============================================================================
+# Temporary Voice Channels (like TempVoice.xyz)
+# =============================================================================
+
+def _format_temp_channel_name(fmt: str, member: discord.Member, channel_num: int = 0) -> str:
+    name = fmt
+    name = name.replace("{OWNER_USERNAME}", member.name)
+    name = name.replace("{OWNER_NICKNAME}", member.display_name)
+    name = name.replace("{OWNER_MENTION}", member.mention)
+    name = name.replace("{OWNER_CREATED}", member.created_at.strftime("%d/%m/%Y") if member.created_at else "?")
+    name = name.replace("{OWNER_JOINED}", member.joined_at.strftime("%d/%m/%Y") if member.joined_at else "?")
+    name = name.replace("{GUILD_ID}", str(member.guild.id))
+    name = name.replace("{NUMBER}", str(channel_num))
+    name = name.replace("{NUMBER_ROMAN}", ["", "I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"][min(channel_num, 10)])
+    name = name.replace("{NUMBER_ALPHA}", chr(64 + min(max(channel_num, 1), 26)))
+    name = name.replace("{NUMBER_DIGIT}", f"{channel_num:03d}")
+    # Clean up excessive whitespace
+    name = re.sub(r"\s+", " ", name).strip()
+    return name[:100]
+
+
+def _is_creator_channel(channel_id: int) -> bool:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM temp_voice_creators WHERE channel_id = ?", (channel_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row is not None
+
+
+def _get_creator_config(channel_id: int) -> dict | None:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT guild_id, channel_id, name_format, user_limit, privacy_mode, category_id FROM temp_voice_creators WHERE channel_id = ?",
+        (channel_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "guild_id": row[0],
+        "channel_id": row[1],
+        "name_format": row[2],
+        "user_limit": row[3],
+        "privacy_mode": row[4],
+        "category_id": row[5],
+    }
+
+
+def _get_temp_channel(channel_id: int) -> dict | None:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT channel_id, guild_id, owner_id, creator_id, created_at, name, user_limit, privacy FROM temp_voice_active WHERE channel_id = ?",
+        (channel_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "channel_id": row[0],
+        "guild_id": row[1],
+        "owner_id": row[2],
+        "creator_id": row[3],
+        "created_at": row[4],
+        "name": row[5],
+        "user_limit": row[6],
+        "privacy": row[7],
+    }
+
+
+def _save_temp_channel(channel_id: int, guild_id: int, owner_id: int, creator_id: int, **kwargs):
+    conn = get_db()
+    now = datetime.now(timezone.utc).timestamp()
+    conn.execute(
+        """INSERT INTO temp_voice_active (channel_id, guild_id, owner_id, creator_id, created_at, name, user_limit, privacy)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(channel_id) DO UPDATE SET
+             owner_id=excluded.owner_id, name=COALESCE(excluded.name, temp_voice_active.name),
+             user_limit=COALESCE(excluded.user_limit, temp_voice_active.user_limit),
+             privacy=COALESCE(excluded.privacy, temp_voice_active.privacy)""",
+        (channel_id, guild_id, owner_id, creator_id, now,
+         kwargs.get("name"), kwargs.get("user_limit", 0), kwargs.get("privacy", "public")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _remove_temp_channel(channel_id: int):
+    conn = get_db()
+    conn.execute("DELETE FROM temp_voice_active WHERE channel_id = ?", (channel_id,))
+    conn.commit()
+    conn.close()
+
+
+def _get_user_prefs(guild_id: int, user_id: int) -> dict:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT saved_name, saved_limit, saved_privacy FROM temp_voice_prefs WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return {"saved_name": None, "saved_limit": None, "saved_privacy": None}
+    return {"saved_name": row[0], "saved_limit": row[1], "saved_privacy": row[2]}
+
+
+def _save_user_prefs(guild_id: int, user_id: int, **kwargs):
+    conn = get_db()
+    existing = _get_user_prefs(guild_id, user_id)
+    name = kwargs.get("saved_name", existing["saved_name"])
+    limit = kwargs.get("saved_limit", existing["saved_limit"])
+    privacy = kwargs.get("saved_privacy", existing["saved_privacy"])
+    conn.execute(
+        """INSERT INTO temp_voice_prefs (guild_id, user_id, saved_name, saved_limit, saved_privacy)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(guild_id, user_id) DO UPDATE SET
+             saved_name=excluded.saved_name, saved_limit=excluded.saved_limit,
+             saved_privacy=excluded.saved_privacy""",
+        (guild_id, user_id, name, limit, privacy),
+    )
+    conn.commit()
+    conn.close()
+
+
+async def _create_temp_channel(member: discord.Member, creator_channel: discord.VoiceChannel):
+    guild = member.guild
+    config = _get_creator_config(creator_channel.id)
+    if not config:
+        return
+
+    # Check existing temp channels for this creator to determine number
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT COUNT(*) FROM temp_voice_active WHERE guild_id = ? AND creator_id = ?",
+        (guild.id, creator_channel.id),
+    )
+    count = cur.fetchone()[0] + 1
+    conn.close()
+
+    prefs = _get_user_prefs(guild.id, member.id)
+    name = _format_temp_channel_name(config["name_format"], member, count)
+
+    # Pick category
+    category = None
+    if config["category_id"]:
+        cat = guild.get_channel(int(config["category_id"]))
+        if cat and isinstance(cat, discord.CategoryChannel):
+            # Check if category has room (Discord limit: 50 ch per cat)
+            if len(cat.channels) < 50:
+                category = cat
+
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True, speak=True),
+        member: discord.PermissionOverwrite(manage_channels=True, move_members=True, mute_members=True, deafen_members=True, connect=True, speak=True),
+        guild.me: discord.PermissionOverwrite(manage_channels=True, manage_permissions=True, connect=True, speak=True, view_channel=True),
+    }
+
+    try:
+        temp_channel = await guild.create_voice_channel(
+            name=name,
+            category=category,
+            overwrites=overwrites,
+            reason=f"TempVoice: {member} joined creator #{creator_channel.name}",
+        )
+    except Exception as e:
+        print(f"[TEMP VOICE] Failed to create channel: {e}")
+        return
+
+    _save_temp_channel(
+        temp_channel.id, guild.id, member.id, creator_channel.id,
+        name=name, user_limit=config["user_limit"], privacy=config["privacy_mode"],
+    )
+
+    if config["user_limit"] > 0:
+        await temp_channel.edit(user_limit=config["user_limit"])
+
+    try:
+        await member.move_to(temp_channel, reason="TempVoice: Moved to new channel")
+    except Exception:
+        pass
+
+    print(f"[TEMP VOICE] Created {temp_channel.name} ({temp_channel.id}) for {member}")
+    await _send_temp_interface(temp_channel, member)
+
+
+async def _delete_temp_channel(channel: discord.VoiceChannel):
+    if not _get_temp_channel(channel.id):
+        return
+    try:
+        await channel.delete(reason="TempVoice: Channel empty")
+        _remove_temp_channel(channel.id)
+        print(f"[TEMP VOICE] Deleted temp channel {channel.name} ({channel.id})")
+    except Exception as e:
+        print(f"[TEMP VOICE] Failed to delete {channel.name}: {e}")
+
+
+async def _handle_owner_left(channel: discord.VoiceChannel, current_members: list[discord.Member]):
+    record = _get_temp_channel(channel.id)
+    if not record:
+        return
+    # If no one is in the channel, delete it
+    if len(current_members) == 0:
+        await _delete_temp_channel(channel)
+        return
+    # Transfer ownership to the next person who's been there longest
+    new_owner = current_members[0]
+    _save_temp_channel(channel.id, channel.guild.id, new_owner.id, record["creator_id"],
+                       name=record["name"], user_limit=record["user_limit"], privacy=record["privacy"])
+    print(f"[TEMP VOICE] Ownership transferred to {new_owner} for {channel.name}")
+
+
+async def _reapply_privacy(channel: discord.VoiceChannel, privacy: str, owner_id: int, trusted: set[int], blocked: set[int]):
+    guild = channel.guild
+    overwrites = {
+        guild.default_role: discord.PermissionOverwrite(),
+        guild.me: discord.PermissionOverwrite(manage_channels=True, manage_permissions=True, connect=True, speak=True, view_channel=True),
+    }
+    owner = guild.get_member(owner_id)
+    if owner:
+        overwrites[owner] = discord.PermissionOverwrite(manage_channels=True, move_members=True, mute_members=True, deafen_members=True, connect=True, speak=True)
+
+    if privacy == "public":
+        overwrites[guild.default_role].connect = True
+        overwrites[guild.default_role].view_channel = True
+        overwrites[guild.default_role].speak = True
+    elif privacy == "locked":
+        overwrites[guild.default_role].connect = False
+        overwrites[guild.default_role].view_channel = True
+        overwrites[guild.default_role].speak = True
+    elif privacy == "hidden":
+        overwrites[guild.default_role].connect = False
+        overwrites[guild.default_role].view_channel = False
+
+    for uid in trusted:
+        u = guild.get_member(uid)
+        if u:
+            overwrites[u] = discord.PermissionOverwrite(connect=True, view_channel=True, speak=True)
+
+    for uid in blocked:
+        u = guild.get_member(uid)
+        if u:
+            overwrites[u] = discord.PermissionOverwrite(connect=False, view_channel=False)
+
+    try:
+        await channel.edit(overwrites=overwrites)
+    except Exception as e:
+        print(f"[TEMP VOICE] Failed to reapply privacy: {e}")
+
+
+# --- Voice State Event ---
+
+@bot.event
+async def on_voice_state_update(member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    if member.bot:
+        return
+
+    # User left a channel
+    if before.channel and before.channel != after.channel:
+        old_channel = before.channel
+        if _is_creator_channel(old_channel.id):
+            pass  # They left a creator - nothing to do
+        elif _get_temp_channel(old_channel.id):
+            remaining = [m for m in old_channel.members if not m.bot]
+            # Check if owner left
+            record = _get_temp_channel(old_channel.id)
+            if record and record["owner_id"] == member.id:
+                await _handle_owner_left(old_channel, remaining)
+            elif len(remaining) == 0:
+                await _delete_temp_channel(old_channel)
+
+    # User joined a channel
+    if after.channel and after.channel != before.channel:
+        new_channel = after.channel
+        if _is_creator_channel(new_channel.id):
+            # Check if they already own a temp channel
+            guild_id = member.guild.id
+            conn = get_db()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT channel_id FROM temp_voice_active WHERE guild_id = ? AND owner_id = ?",
+                (guild_id, member.id),
+            )
+            existing = cur.fetchone()
+            conn.close()
+            if existing:
+                # They already have a temp channel - move them to it
+                existing_ch = member.guild.get_channel(int(existing[0]))
+                if existing_ch:
+                    try:
+                        await member.move_to(existing_ch, reason="TempVoice: Moving to your existing channel")
+                    except Exception:
+                        pass
+                    return
+            # Create a new temp channel
+            await _create_temp_channel(member, new_channel)
+
+    # Check if a temp channel needs cleanup (user disconnected)
+    if before.channel and not after.channel:
+        old_channel = before.channel
+        if _get_temp_channel(old_channel.id) and len(old_channel.members) == 0:
+            await _delete_temp_channel(old_channel)
+
+
+# --- TempVoice Admin Commands ---
+
+@app_commands.guild_only()
+class TempVoiceAdmin(app_commands.Group):
+    pass
+
+tempvoice_group = TempVoiceAdmin(name="tempvoice", description="Manage temporary voice channels")
+
+
+@tempvoice_group.command(name="setup", description="Mark this voice channel as a creator channel (Admin only)")
+@app_commands.describe(channel="Voice channel to set as creator")
+async def slash_tv_setup(interaction: discord.Interaction, channel: discord.VoiceChannel):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO temp_voice_creators (guild_id, channel_id, name_format, user_limit, privacy_mode) VALUES (?, ?, ?, 0, 'public')",
+            (interaction.guild.id, channel.id),
+        )
+        conn.commit()
+        await interaction.response.send_message(f":white_check_mark: **{channel.name}** is now a creator channel! Join it to spawn a temp voice channel.", ephemeral=False)
+    except Exception:
+        await interaction.response.send_message(f":x: **{channel.name}** is already a creator channel.", ephemeral=True)
+    finally:
+        conn.close()
+
+
+@tempvoice_group.command(name="remove", description="Remove creator channel status (Admin only)")
+@app_commands.describe(channel="Voice channel to remove")
+async def slash_tv_remove(interaction: discord.Interaction, channel: discord.VoiceChannel):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+
+    if not _is_creator_channel(channel.id):
+        await interaction.response.send_message(f":x: **{channel.name}** is not a creator channel.", ephemeral=True)
+        return
+
+    conn = get_db()
+    conn.execute("DELETE FROM temp_voice_creators WHERE channel_id = ?", (channel.id,))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: **{channel.name}** is no longer a creator channel.", ephemeral=False)
+
+
+@tempvoice_group.command(name="config", description="Show current server's creator channels")
+async def slash_tv_config(interaction: discord.Interaction):
+    await interaction.response.defer()
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT channel_id, name_format, user_limit, privacy_mode FROM temp_voice_creators WHERE guild_id = ?",
+        (interaction.guild.id,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        await interaction.followup.send(":x: No creator channels set up. Use `/tempvoice setup` on a voice channel.")
+        return
+
+    lines = []
+    for row in rows:
+        ch = interaction.guild.get_channel(int(row[0]))
+        ch_name = ch.mention if ch else f"`{row[0]}`"
+        lines.append(f"• {ch_name} — Format: `{row[1]}` | Limit: {row[2]} | Privacy: {row[3]}")
+
+    await interaction.followup.send(f":loud_sound: **Creator Channels:**\n" + "\n".join(lines))
+
+
+# --- /voice Command Group (User Temp Channel Controls) ---
+
+@app_commands.guild_only()
+class VoiceControls(app_commands.Group):
+    pass
+
+voice_group = VoiceControls(name="voice", description="Manage your temporary voice channel")
+
+
+def _require_temp_owner(interaction: discord.Interaction):
+    """Check that the user owns a temp channel and returns (record, channel) or sends error."""
+    record = _get_temp_channel(interaction.channel_id)
+    if not record or record["owner_id"] != interaction.user.id:
+        # Check if they own any temp channel
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT channel_id FROM temp_voice_active WHERE guild_id = ? AND owner_id = ?",
+            (interaction.guild.id, interaction.user.id),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if not row:
+            return None, None, ":x: You don't own a temporary voice channel. Join a creator channel first."
+        ch = interaction.guild.get_channel(int(row[0]))
+        if ch:
+            return _get_temp_channel(ch.id), ch, None
+        return None, None, ":x: Could not find your temp channel."
+    ch = interaction.guild.get_channel(int(record["channel_id"]))
+    return record, ch, None
+
+
+@voice_group.command(name="name", description="Change your temp channel name")
+@app_commands.describe(name="New name for your channel")
+async def slash_voice_name(interaction: discord.Interaction, name: str):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    if len(name) > 100:
+        await interaction.followup.send(":x: Name too long (max 100 chars).", ephemeral=True)
+        return
+    try:
+        await ch.edit(name=name)
+        _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], name=name)
+        _save_user_prefs(interaction.guild.id, interaction.user.id, saved_name=name)
+        await interaction.followup.send(f":white_check_mark: Channel renamed to **{name}**", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed to rename: {e}", ephemeral=True)
+
+
+@voice_group.command(name="limit", description="Set user limit for your temp channel (0 = unlimited)")
+@app_commands.describe(limit="Max users (0 = no limit)")
+async def slash_voice_limit(interaction: discord.Interaction, limit: int):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    if limit < 0 or limit > 99:
+        await interaction.followup.send(":x: Limit must be between 0 and 99.", ephemeral=True)
+        return
+    try:
+        await ch.edit(user_limit=limit)
+        _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], user_limit=limit)
+        _save_user_prefs(interaction.guild.id, interaction.user.id, saved_limit=limit)
+        msg = f":white_check_mark: User limit set to **{limit}**." if limit > 0 else ":white_check_mark: User limit removed (unlimited)."
+        await interaction.followup.send(msg, ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="privacy", description="Set your channel privacy")
+@app_commands.describe(mode="public (open), locked (visible but no join), hidden (invisible)")
+async def slash_voice_privacy(interaction: discord.Interaction, mode: str):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    mode = mode.lower()
+    if mode not in ("public", "locked", "hidden"):
+        await interaction.followup.send(":x: Mode must be: public, locked, or hidden.", ephemeral=True)
+        return
+    try:
+        guild = ch.guild
+        overwrites = ch.overwrites
+        default_perms = overwrites.get(guild.default_role, discord.PermissionOverwrite())
+        if mode == "public":
+            default_perms.connect = True
+            default_perms.view_channel = True
+            default_perms.speak = True
+        elif mode == "locked":
+            default_perms.connect = False
+            default_perms.view_channel = True
+            default_perms.speak = True
+        elif mode == "hidden":
+            default_perms.connect = False
+            default_perms.view_channel = False
+        overwrites[guild.default_role] = default_perms
+        await ch.edit(overwrites=overwrites)
+        _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], privacy=mode)
+        _save_user_prefs(interaction.guild.id, interaction.user.id, saved_privacy=mode)
+        icon = {"public": "🔓", "locked": "🔒", "hidden": "😎"}
+        await interaction.followup.send(f"{icon.get(mode, '')} Privacy set to **{mode}**.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="trust", description="Allow a user to join your locked/hidden channel")
+@app_commands.describe(user="User to trust")
+async def slash_voice_trust(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    try:
+        await ch.set_permissions(user, connect=True, view_channel=True, speak=True)
+        await interaction.followup.send(f":white_check_mark: {user.mention} can now join your channel.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="untrust", description="Remove a user's special access")
+@app_commands.describe(user="User to untrust")
+async def slash_voice_untrust(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    try:
+        await ch.set_permissions(user, overwrite=None)
+        await interaction.followup.send(f":white_check_mark: {user.mention}'s access removed.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="block", description="Block a user from joining")
+@app_commands.describe(user="User to block")
+async def slash_voice_block(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    try:
+        await ch.set_permissions(user, connect=False, view_channel=False)
+        if user in ch.members:
+            await user.move_to(None, reason="TempVoice: Blocked by owner")
+        await interaction.followup.send(f":white_check_mark: {user.mention} blocked.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="unblock", description="Unblock a user")
+@app_commands.describe(user="User to unblock")
+async def slash_voice_unblock(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    try:
+        await ch.set_permissions(user, overwrite=None)
+        await interaction.followup.send(f":white_check_mark: {user.mention} unblocked.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="kick", description="Kick a user from your temp channel")
+@app_commands.describe(user="User to kick")
+async def slash_voice_kick(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    if user not in ch.members:
+        await interaction.followup.send(f":x: {user.mention} is not in your channel.", ephemeral=True)
+        return
+    try:
+        await user.move_to(None, reason=f"TempVoice: Kicked by {interaction.user}")
+        # Lock the channel briefly so they can't rejoin
+        await ch.set_permissions(user, connect=False)
+        await interaction.followup.send(f":boot: {user.mention} kicked from your channel.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="invite", description="Invite a user to your temp channel")
+@app_commands.describe(user="User to invite")
+async def slash_voice_invite(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    try:
+        await ch.set_permissions(user, connect=True, view_channel=True, speak=True)
+        await interaction.followup.send(f":envelope: Invited {user.mention} to **{ch.name}**", ephemeral=True)
+        try:
+            await user.send(f":wave: {interaction.user.display_name} invited you to **{ch.name}** in **{ch.guild.name}**!\nJoin: <#{ch.id}>")
+        except Exception:
+            pass
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="claim", description="Claim ownership of a temp channel (if owner left)")
+async def slash_voice_claim(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    # The user must be IN a temp channel that has an absent owner
+    if not interaction.user.voice or not interaction.user.voice.channel:
+        await interaction.followup.send(":x: You're not in a voice channel.", ephemeral=True)
+        return
+    ch = interaction.user.voice.channel
+    record = _get_temp_channel(ch.id)
+    if not record:
+        await interaction.followup.send(":x: This is not a temporary voice channel.", ephemeral=True)
+        return
+    owner = ch.guild.get_member(int(record["owner_id"]))
+    if owner and owner in ch.members:
+        await interaction.followup.send(":x: The owner is still in the channel.", ephemeral=True)
+        return
+    # Transfer ownership
+    _save_temp_channel(ch.id, ch.guild.id, interaction.user.id, record["creator_id"],
+                       name=record["name"], user_limit=record["user_limit"], privacy=record["privacy"])
+    await ch.set_permissions(interaction.user, manage_channels=True, move_members=True, mute_members=True, deafen_members=True, connect=True, speak=True)
+    if owner:
+        try:
+            await ch.set_permissions(owner, overwrite=None)
+        except Exception:
+            pass
+    await interaction.followup.send(f":white_check_mark: You are now the owner of **{ch.name}**!", ephemeral=True)
+
+
+@voice_group.command(name="transfer", description="Transfer ownership to another user in your channel")
+@app_commands.describe(user="New owner")
+async def slash_voice_transfer(interaction: discord.Interaction, user: discord.Member):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    if user == interaction.user:
+        await interaction.followup.send(":x: You already own the channel.", ephemeral=True)
+        return
+    if user not in ch.members:
+        await interaction.followup.send(f":x: {user.mention} is not in your channel.", ephemeral=True)
+        return
+    try:
+        await ch.set_permissions(interaction.user, overwrite=None)
+        await ch.set_permissions(user, manage_channels=True, move_members=True, mute_members=True, deafen_members=True, connect=True, speak=True)
+        _save_temp_channel(ch.id, ch.guild.id, user.id, record["creator_id"],
+                           name=record["name"], user_limit=record["user_limit"], privacy=record["privacy"])
+        await interaction.followup.send(f":white_check_mark: Ownership transferred to {user.mention}.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="info", description="Show info about your temp channel")
+async def slash_voice_info(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    owner = ch.guild.get_member(int(record["owner_id"]))
+    owner_name = owner.mention if owner else f"User {record['owner_id']}"
+    created = datetime.fromtimestamp(record["created_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if record["created_at"] else "?"
+    embed = discord.Embed(title=f":loud_sound: {ch.name}", color=discord.Color.blue())
+    embed.add_field(name="Owner", value=owner_name, inline=True)
+    embed.add_field(name="Users", value=f"{len(ch.members)}/{ch.user_limit or '∞'}", inline=True)
+    embed.add_field(name="Privacy", value=record["privacy"].title(), inline=True)
+    embed.add_field(name="Created", value=created, inline=False)
+    await interaction.followup.send(embed=embed, ephemeral=True)
+
+
+@voice_group.command(name="reset", description="Reset your temp channel to defaults")
+async def slash_voice_reset(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    config = _get_creator_config(record["creator_id"])
+    default_name = ch.name
+    if config:
+        default_name = _format_temp_channel_name(config["name_format"], interaction.user, 0)
+    try:
+        guild = ch.guild
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True, speak=True),
+            guild.me: discord.PermissionOverwrite(manage_channels=True, manage_permissions=True, connect=True, speak=True, view_channel=True),
+        }
+        await ch.edit(name=default_name, user_limit=0, overwrites=overwrites)
+        _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"],
+                           name=default_name, user_limit=0, privacy="public")
+        await interaction.followup.send(f":white_check_mark: Channel reset to defaults: **{default_name}**", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@voice_group.command(name="delete", description="Force delete your temp channel")
+async def slash_voice_delete(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    record, ch, err = _require_temp_owner(interaction)
+    if err:
+        await interaction.followup.send(err, ephemeral=True)
+        return
+    try:
+        _remove_temp_channel(ch.id)
+        await ch.delete(reason=f"TempVoice: Deleted by owner {interaction.user}")
+        await interaction.followup.send(":white_check_mark: Channel deleted.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+# --- Voice Interface View (TempVoice-style button controls) ---
+
+PRIVACY_CYCLE = ["public", "locked", "hidden"]
+PRIVACY_LABELS = {"public": "🔓 Public", "locked": "🔒 Locked", "hidden": "😎 Hidden"}
+PRIVACY_EMOJIS = {"public": "🔓", "locked": "🔒", "hidden": "😎"}
+
+
+async def _send_temp_interface(target_channel: discord.VoiceChannel, owner: discord.Member):
+    """Send the control interface to the voice channel's text chat."""
+    record = _get_temp_channel(target_channel.id)
+    if not record:
+        return
+    try:
+        txt = target_channel.guild.get_channel(target_channel.id)
+        if txt and isinstance(txt, discord.TextChannel):
+            embed = discord.Embed(
+                title=f"🎧 {target_channel.name} — Controls",
+                description=f"Owner: {owner.mention}\nUse the buttons below to manage your channel.",
+                color=0x2b2d31,
+            )
+            embed.set_footer(text="TempVoice • You're the owner")
+            view = TempVoiceInterface(target_channel.id, record.get("privacy", "public"))
+            await txt.send(embed=embed, view=view)
+    except Exception:
+        pass
+
+
+def _toggle_privacy(current: str) -> str:
+    idx = PRIVACY_CYCLE.index(current) if current in PRIVACY_CYCLE else 0
+    return PRIVACY_CYCLE[(idx + 1) % len(PRIVACY_CYCLE)]
+
+
+async def _apply_privacy(ch: discord.VoiceChannel, mode: str):
+    guild = ch.guild
+    overwrites = ch.overwrites
+    default_perms = overwrites.get(guild.default_role, discord.PermissionOverwrite())
+    if mode == "public":
+        default_perms.connect = True
+        default_perms.view_channel = True
+        default_perms.speak = True
+    elif mode == "locked":
+        default_perms.connect = False
+        default_perms.view_channel = True
+        default_perms.speak = True
+    else:  # hidden
+        default_perms.connect = False
+        default_perms.view_channel = False
+    overwrites[guild.default_role] = default_perms
+    # Preserve owner override
+    overwrites[guild.me] = discord.PermissionOverwrite(manage_channels=True, manage_permissions=True, connect=True, speak=True, view_channel=True)
+    await ch.edit(overwrites=overwrites)
+
+
+def _check_owner(interaction: discord.Interaction, target_channel_id: int) -> tuple[dict | None, discord.VoiceChannel | None, str | None]:
+    ch = interaction.guild.get_channel(target_channel_id)
+    if not ch or not isinstance(ch, discord.VoiceChannel):
+        return None, None, ":x: Channel not found."
+    record = _get_temp_channel(ch.id)
+    if not record:
+        return None, None, ":x: Not a temporary channel."
+    if record["owner_id"] != interaction.user.id:
+        return None, None, ":x: You don't own this channel."
+    return record, ch, None
+
+
+class TempVoiceInterface(discord.ui.View):
+    def __init__(self, target_channel_id: int, current_privacy: str = "public"):
+        super().__init__(timeout=None)
+        self.target_channel_id = target_channel_id
+        self.current_privacy = current_privacy
+
+    # Row 1: Name, Limit, Privacy toggle
+    @discord.ui.button(label="Name", emoji="✏️", style=discord.ButtonStyle.secondary, custom_id="tvif_name")
+    async def tv_name(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        await interaction.response.send_modal(TempVoiceNameModal(self.target_channel_id))
+
+    @discord.ui.button(label="Limit", emoji="🔢", style=discord.ButtonStyle.secondary, custom_id="tvif_limit")
+    async def tv_limit(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        await interaction.response.send_modal(TempVoiceLimitModal(self.target_channel_id))
+
+    @discord.ui.button(label="Public", emoji="🔓", style=discord.ButtonStyle.success, custom_id="tvif_privacy")
+    async def tv_privacy(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        new_mode = _toggle_privacy(record["privacy"])
+        try:
+            await _apply_privacy(ch, new_mode)
+            _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], privacy=new_mode)
+            _save_user_prefs(interaction.guild.id, interaction.user.id, saved_privacy=new_mode)
+            # Update the button label
+            button.label = PRIVACY_LABELS.get(new_mode, "Public")
+            button.emoji = PRIVACY_EMOJIS.get(new_mode, "🔓")
+            style_map = {"public": discord.ButtonStyle.success, "locked": discord.ButtonStyle.primary, "hidden": discord.ButtonStyle.danger}
+            button.style = style_map.get(new_mode, discord.ButtonStyle.success)
+            self.current_privacy = new_mode
+            await interaction.response.edit_message(view=self)
+        except Exception as e:
+            await interaction.response.send_message(f":x: {e}", ephemeral=True)
+
+    # Row 2: Waiting Room, Chat Thread
+    @discord.ui.button(label="Waiting", emoji="🕐", style=discord.ButtonStyle.secondary, custom_id="tvif_waiting")
+    async def tv_waiting(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        # Toggle waiting room: create a stage-like channel below this one
+        guild = ch.guild
+        existing = discord.utils.get(guild.voice_channels, name=f"waiting-{ch.id}")
+        if existing:
+            await interaction.response.send_message(":x: Waiting room already exists.", ephemeral=True)
+            return
+        try:
+            wait_ch = await guild.create_voice_channel(
+                name=f"⏳ {ch.name} Waiting",
+                category=ch.category,
+                position=ch.position + 1,
+                user_limit=0,
+            )
+            # Set perms: default can join waiting room but not main
+            await ch.set_permissions(guild.default_role, connect=False, view_channel=False)
+            await interaction.response.send_message(f":white_check_mark: Waiting room created: {wait_ch.mention}\nUsers must be trusted to enter your main channel.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+    @discord.ui.button(label="Chat Thread", emoji="💬", style=discord.ButtonStyle.secondary, custom_id="tvif_thread")
+    async def tv_thread(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        txt = interaction.guild.get_channel(ch.id)
+        if not txt or not isinstance(txt, discord.TextChannel):
+            await interaction.response.send_message(":x: No text chat available for this voice channel.", ephemeral=True)
+            return
+        try:
+            thread = await txt.create_thread(name=f"💬 {ch.name} Chat", type=discord.ChannelType.public_thread)
+            await interaction.response.send_message(f":white_check_mark: Thread created: {thread.mention}", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+    # Row 3: Trust, Untrust, Block, Unblock
+    @discord.ui.button(label="Trust", emoji="✅", style=discord.ButtonStyle.success, custom_id="tvif_trust")
+    async def tv_trust(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "trust"))
+
+    @discord.ui.button(label="Untrust", emoji="➖", style=discord.ButtonStyle.secondary, custom_id="tvif_untrust")
+    async def tv_untrust(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "untrust"))
+
+    @discord.ui.button(label="Block", emoji="🚫", style=discord.ButtonStyle.danger, custom_id="tvif_block")
+    async def tv_block(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "block"))
+
+    @discord.ui.button(label="Unblock", emoji="♻️", style=discord.ButtonStyle.secondary, custom_id="tvif_unblock")
+    async def tv_unblock(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "unblock"))
+
+    # Row 4: Invite, Kick, Info, Reset, Delete
+    @discord.ui.button(label="Invite", emoji="📨", style=discord.ButtonStyle.secondary, custom_id="tvif_invite")
+    async def tv_invite(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "invite"))
+
+    @discord.ui.button(label="Kick", emoji="👢", style=discord.ButtonStyle.danger, custom_id="tvif_kick")
+    async def tv_kick(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(TempVoiceUserModal(self.target_channel_id, "kick"))
+
+    @discord.ui.button(label="Info", emoji="📋", style=discord.ButtonStyle.secondary, custom_id="tvif_info")
+    async def tv_info(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        owner = ch.guild.get_member(int(record["owner_id"]))
+        owner_name = owner.mention if owner else f"User {record['owner_id']}"
+        created = datetime.fromtimestamp(record["created_at"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC") if record["created_at"] else "?"
+        embed = discord.Embed(title=f"🎧 {ch.name}", color=0x2b2d31)
+        embed.add_field(name="Owner", value=owner_name, inline=True)
+        embed.add_field(name="Users", value=f"{len(ch.members)}/{ch.user_limit or '∞'}", inline=True)
+        embed.add_field(name="Privacy", value=record["privacy"].title(), inline=True)
+        embed.add_field(name="Created", value=created, inline=False)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(label="Reset", emoji="🔄", style=discord.ButtonStyle.secondary, custom_id="tvif_reset")
+    async def tv_reset(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        config = _get_creator_config(record["creator_id"])
+        default_name = config["name_format"] if config else f"{interaction.user.display_name}s Channel"
+        default_name = _format_temp_channel_name(default_name, interaction.user, 0)
+        try:
+            await ch.edit(name=default_name, user_limit=0)
+            await _apply_privacy(ch, "public")
+            _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"],
+                               name=default_name, user_limit=0, privacy="public")
+            await interaction.response.send_message(f":white_check_mark: Reset to defaults.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+    @discord.ui.button(label="Delete", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="tvif_delete")
+    async def tv_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.response.send_message(err, ephemeral=True)
+            return
+        try:
+            _remove_temp_channel(ch.id)
+            await ch.delete(reason=f"TempVoice: Deleted by owner {interaction.user}")
+            await interaction.response.send_message(":white_check_mark: Channel deleted.", ephemeral=True)
+        except Exception as e:
+            await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+
+# Modals for the interface
+
+class TempVoiceNameModal(discord.ui.Modal, title="Change Channel Name"):
+    name_input = discord.ui.TextInput(label="New name", max_length=100)
+
+    def __init__(self, target_channel_id: int):
+        super().__init__()
+        self.target_channel_id = target_channel_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.followup.send(err, ephemeral=True)
+            return
+        try:
+            name = self.name_input.value.strip()[:100]
+            await ch.edit(name=name)
+            _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], name=name)
+            _save_user_prefs(interaction.guild.id, interaction.user.id, saved_name=name)
+            await interaction.followup.send(f":white_check_mark: Renamed to **{name}**", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+class TempVoiceLimitModal(discord.ui.Modal, title="Set User Limit"):
+    limit_input = discord.ui.TextInput(label="User limit (0 = unlimited)", max_length=2, default="0")
+
+    def __init__(self, target_channel_id: int):
+        super().__init__()
+        self.target_channel_id = target_channel_id
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.followup.send(err, ephemeral=True)
+            return
+        try:
+            limit = max(0, min(99, int(self.limit_input.value.strip())))
+            await ch.edit(user_limit=limit)
+            _save_temp_channel(ch.id, ch.guild.id, record["owner_id"], record["creator_id"], user_limit=limit)
+            _save_user_prefs(interaction.guild.id, interaction.user.id, saved_limit=limit)
+            msg = f":white_check_mark: Limit set to **{limit}**." if limit > 0 else ":white_check_mark: Limit removed."
+            await interaction.followup.send(msg, ephemeral=True)
+        except ValueError:
+            await interaction.followup.send(":x: Enter a valid number (0-99).", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+class TempVoiceUserModal(discord.ui.Modal, title="Manage User"):
+    user_input = discord.ui.TextInput(label="User ID or mention", placeholder="Paste user ID or @mention")
+    def __init__(self, target_channel_id: int, action: str):
+        super().__init__(title=f"{action.title()} User")
+        self.target_channel_id = target_channel_id
+        self.action = action
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        record, ch, err = _check_owner(interaction, self.target_channel_id)
+        if err:
+            await interaction.followup.send(err, ephemeral=True)
+            return
+        raw = self.user_input.value.strip()
+        uid = re.sub(r"[<@!>]", "", raw)
+        if not uid.isdigit():
+            await interaction.followup.send(":x: Provide a valid user ID or @mention.", ephemeral=True)
+            return
+        user = interaction.guild.get_member(int(uid))
+        if not user:
+            await interaction.followup.send(":x: User not found on this server.", ephemeral=True)
+            return
+
+        try:
+            if self.action == "trust":
+                await ch.set_permissions(user, connect=True, view_channel=True, speak=True)
+                await interaction.followup.send(f":white_check_mark: {user.mention} trusted.", ephemeral=True)
+            elif self.action == "untrust":
+                await ch.set_permissions(user, overwrite=None)
+                await interaction.followup.send(f":white_check_mark: {user.mention} untrusted.", ephemeral=True)
+            elif self.action == "block":
+                await ch.set_permissions(user, connect=False, view_channel=False)
+                if user in ch.members:
+                    await user.move_to(None, reason="TempVoice: Blocked by owner")
+                await interaction.followup.send(f":white_check_mark: {user.mention} blocked.", ephemeral=True)
+            elif self.action == "unblock":
+                await ch.set_permissions(user, overwrite=None)
+                await interaction.followup.send(f":white_check_mark: {user.mention} unblocked.", ephemeral=True)
+            elif self.action == "invite":
+                await ch.set_permissions(user, connect=True, view_channel=True, speak=True)
+                await interaction.followup.send(f":envelope: Invited {user.mention} to **{ch.name}**", ephemeral=True)
+                try:
+                    await user.send(f":wave: {interaction.user.display_name} invited you to **{ch.name}** in **{ch.guild.name}**!\nJoin: <#{ch.id}>")
+                except Exception:
+                    pass
+            elif self.action == "kick":
+                if user in ch.members:
+                    await user.move_to(None, reason=f"TempVoice: Kicked by {interaction.user}")
+                    await ch.set_permissions(user, connect=False)
+                    await interaction.followup.send(f":boot: {user.mention} kicked.", ephemeral=True)
+                else:
+                    await interaction.followup.send(f":x: {user.mention} is not in your channel.", ephemeral=True)
+        except Exception as e:
+            await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="tempcontrol", description="Send the temp voice control panel here")
+@app_commands.describe(channel="Your temp voice channel (default: channel you're in)")
+async def slash_tempcontrol(interaction: discord.Interaction, channel: discord.VoiceChannel = None):
+    target = channel or (interaction.user.voice.channel if interaction.user.voice else None)
+    if not target:
+        await interaction.response.send_message(":x: You're not in a voice channel. Specify one.", ephemeral=True)
+        return
+    record = _get_temp_channel(target.id)
+    if not record or record["owner_id"] != interaction.user.id:
+        await interaction.response.send_message(":x: You don't own that channel.", ephemeral=True)
+        return
+    embed = discord.Embed(
+        title=f"🎧 {target.name} — Controls",
+        description=f"Owner: {interaction.user.mention}",
+        color=0x2b2d31,
+    )
+    embed.set_footer(text="TempVoice • You're the owner")
+    view = TempVoiceInterface(target.id, record.get("privacy", "public"))
+    await interaction.response.send_message(embed=embed, view=view)
+
+
+# Register the persistent views for all known temp channels on startup
+# This is handled by setup_hook overriding
+_original_setup_hook = CodeBot.setup_hook
+
+
+async def _patched_setup_hook(self):
+    await _original_setup_hook(self)
+    # Register temp voice command groups
+    self.tree.add_command(tempvoice_group)
+    self.tree.add_command(voice_group)
+    # Register persistent views for existing temp channels
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id, privacy FROM temp_voice_active")
+    for row in cur.fetchall():
+        self.add_view(TempVoiceInterface(int(row[0]), row[1] or "public"))
+    conn.close()
+
+
+CodeBot.setup_hook = _patched_setup_hook
 
 
 bot.run(TOKEN)
