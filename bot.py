@@ -673,6 +673,7 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
             "-o", tmp.name,
             "-q", "--no-warnings",
             "--default-search", "ytsearch",
+            "--extractor-args", "youtube:skip=webpage;player_client=android",
         ]
         result = subprocess.run(ytdl_cmd, capture_output=True, text=True)
         if result.returncode != 0:
