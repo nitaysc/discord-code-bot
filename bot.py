@@ -658,8 +658,17 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
     try:
         with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
             info = ydl.extract_info(song["url"], download=False)
-            audio_url = info["url"]
+            if "entries" in info:
+                info = info["entries"][0]
             title = info.get("title", "Unknown")
+            audio_url = info.get("url")
+            if not audio_url and info.get("formats"):
+                for fmt in info["formats"]:
+                    if fmt.get("acodec") != "none" and fmt.get("url"):
+                        audio_url = fmt["url"]
+                        break
+            if not audio_url:
+                raise ValueError("No playable URL found")
 
         song["title"] = title
         source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTS)
