@@ -632,6 +632,8 @@ Rules:
 - When someone asks if you can do something, check your capabilities FIRST before saying no.
 - Guide users to use the right /command for what they want.
 - For code/file requests, output the content and the system sends it as a downloadable file.
+- For vague questions like "what is this" or "what does this do" about a file you just sent, explain in text. Do NOT generate new code.
+- Do NOT output code blocks unless the user explicitly asked for code, a script, or a file.
 - For ANY question about current events, recent news, sports results, today's date, future dates, or anything time-sensitive: you MUST rely on the web search results provided in the prompt, NOT your training data. Your training data has a cutoff and may be outdated.
 - If web search results are provided, use them as the authoritative source. Do not contradict them with your built-in knowledge.
 - If no search results are provided and the question is time-sensitive, say you don't have current info rather than guessing.
@@ -760,7 +762,6 @@ def is_create_request(text: str) -> bool:
     skip_phrases = [
         "how to", "look online", "look up", "search for", "find online",
         "tell me", "explain", "what is", "where is", "who is", "why is",
-        "can you", "could you", "would you", "will you",
     ]
     if any(p in text_lower for p in skip_phrases):
         return False
@@ -786,7 +787,7 @@ def choose_filename(file_type: str | None, content: str, index: int = 0) -> str:
     lines = content.strip().split("\n") if content else []
     # Look for an explicit filename comment in the first 5 lines
     for line in lines[:5]:
-        m = re.match(r"^\s*--\s*filename\s*:\s*(\S+)(\.\w+)?\s*$", line, re.IGNORECASE)
+        m = re.match(r"^\s*--\s*filename\s*:\s*([\w\-]+)(\.\w+)?\s*$", line, re.IGNORECASE)
         if m:
             name = m.group(1)
             file_ext = m.group(2) or ext
@@ -1247,10 +1248,7 @@ async def on_message(message):
                         prompt, history, image_urls=image_urls if image_urls else None
                     )
                     add_to_history(channel_id, "assistant", answer)
-                    code_blocks = extract_code_blocks(answer)
                     await message.reply(answer, mention_author=False)
-                    if code_blocks:
-                        await send_files(message.channel, code_blocks)
             except Exception as e:
                 await message.reply(f":x: Error: {e}", mention_author=False)
         return
@@ -1536,10 +1534,7 @@ async def slash_hey(interaction: discord.Interaction, message: str):
             history = get_history(channel_id)
             answer = await answer_with_web_search_if_needed(message, history)
             add_to_history(channel_id, "assistant", answer)
-            code_blocks = extract_code_blocks(answer)
             await interaction.followup.send(answer)
-            if code_blocks:
-                await send_files(interaction.channel, code_blocks)
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
 
