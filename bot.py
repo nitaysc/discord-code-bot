@@ -154,17 +154,23 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    is_mention = bot.user in message.mentions
+    is_mention = bot.user is not None and (
+        bot.user in message.mentions
+        or f"<@{bot.user.id}>" in message.content
+        or f"<@!{bot.user.id}>" in message.content
+    )
     is_dm = isinstance(message.channel, discord.DMChannel)
 
     if is_mention or is_dm:
         content = message.content
-        for m in message.mentions:
-            content = content.replace(f"<@{m.id}>", "").replace(f"<@!{m.id}>", "")
+        for uid in [bot.user.id] + [m.id for m in message.mentions]:
+            content = content.replace(f"<@{uid}>", "").replace(f"<@!{uid}>", "")
         content = content.strip()
 
         if not content:
             content = "hey"
+
+        print(f"[CHAT] {message.author}: {content}")
 
         async with message.channel.typing():
             try:
