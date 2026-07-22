@@ -137,18 +137,69 @@ DB_PATH = os.path.join(os.path.dirname(__file__), "bot.db")
 
 def get_db():
     conn = sqlite3.connect(DB_PATH)
-    conn.execute(
-        """CREATE TABLE IF NOT EXISTS levels (
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS levels (
             guild_id INTEGER NOT NULL,
             user_id INTEGER NOT NULL,
             xp INTEGER DEFAULT 0,
             messages INTEGER DEFAULT 0,
+            voice_minutes INTEGER DEFAULT 0,
             last_xp REAL DEFAULT 0,
             PRIMARY KEY (guild_id, user_id)
-        )"""
+        );
+        CREATE TABLE IF NOT EXISTS level_settings (
+            guild_id INTEGER NOT NULL,
+            key TEXT NOT NULL,
+            value TEXT,
+            PRIMARY KEY (guild_id, key)
+        );
+        CREATE TABLE IF NOT EXISTS role_rewards (
+            guild_id INTEGER NOT NULL,
+            level INTEGER NOT NULL,
+            role_id INTEGER NOT NULL,
+            PRIMARY KEY (guild_id, level)
+        );
+        CREATE TABLE IF NOT EXISTS xp_blacklist (
+            guild_id INTEGER NOT NULL,
+            target_id INTEGER NOT NULL,
+            target_type TEXT NOT NULL,
+            PRIMARY KEY (guild_id, target_id, target_type)
+        );
+        CREATE TABLE IF NOT EXISTS xp_multipliers (
+            guild_id INTEGER NOT NULL,
+            target_id INTEGER NOT NULL,
+            target_type TEXT NOT NULL,
+            multiplier REAL NOT NULL,
+            PRIMARY KEY (guild_id, target_id, target_type)
+        );
+        """
     )
     conn.commit()
     return conn
+
+
+def _get_setting(guild_id: int, key: str, default=None):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT value FROM level_settings WHERE guild_id = ? AND key = ?",
+        (guild_id, key),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if row else default
+
+
+def _set_setting(guild_id: int, key: str, value):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO level_settings (guild_id, key, value) VALUES (?, ?, ?) "
+        "ON CONFLICT(guild_id, key) DO UPDATE SET value = excluded.value",
+        (guild_id, key, str(value)),
+    )
+    conn.commit()
+    conn.close()
 
 
 def xp_for_level(level: int) -> int:
@@ -162,16 +213,78 @@ def level_from_xp(xp: int) -> int:
     return level
 
 
+def _is_blacklisted(guild_id: int, channel_id: int, role_ids: list[int]) -> bool:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT 1 FROM xp_blacklist WHERE guild_id = ? AND target_id = ? AND target_type = 'channel'",
+        (guild_id, channel_id),
+    )
+    if cur.fetchone():
+        conn.close()
+        return True
+    if role_ids:
+        placeholders = ",".join("?" * len(role_ids))
+        cur.execute(
+            f"SELECT 1 FROM xp_blacklist WHERE guild_id = ? AND target_id IN ({placeholders}) AND target_type = 'role' LIMIT 1",
+            (guild_id, *role_ids),
+        )
+        if cur.fetchone():
+            conn.close()
+            return True
+    conn.close()
+    return False
+
+
+def _get_multiplier(guild_id: int, channel_id: int, role_ids: list[int]) -> float:
+    conn = get_db()
+    cur = conn.cursor()
+    mult = 1.0
+    cur.execute(
+        "SELECT multiplier FROM xp_multipliers WHERE guild_id = ? AND target_id = ? AND target_type = 'channel'",
+        (guild_id, channel_id),
+    )
+    row = cur.fetchone()
+    if row:
+        mult *= row[0]
+    if role_ids:
+        placeholders = ",".join("?" * len(role_ids))
+        cur.execute(
+            f"SELECT multiplier FROM xp_multipliers WHERE guild_id = ? AND target_id IN ({placeholders}) AND target_type = 'role'",
+            (guild_id, *role_ids),
+        )
+        for row in cur.fetchall():
+            mult *= row[0]
+    conn.close()
+    return mult
+
+
 _xp_cooldowns: dict[tuple[int, int], float] = {}
 
 
-def add_xp(guild_id: int, user_id: int) -> tuple[int, int, bool]:
+def add_message_xp(guild_id: int, user_id: int, channel_id: int, role_ids: list[int]) -> tuple[int, int, bool] | None:
+    if _is_blacklisted(guild_id, channel_id, role_ids):
+        return None
     now = datetime.now(timezone.utc).timestamp()
     key = (guild_id, user_id)
-    if key in _xp_cooldowns and now - _xp_cooldowns[key] < 30:
+    cooldown = float(_get_setting(guild_id, "cooldown", 30))
+    if key in _xp_cooldowns and now - _xp_cooldowns[key] < cooldown:
         return None
     _xp_cooldowns[key] = now
-    gained = random.randint(15, 25)
+    min_xp = int(_get_setting(guild_id, "min_xp", 15))
+    max_xp = int(_get_setting(guild_id, "max_xp", 25))
+    gained = random.randint(min_xp, max_xp)
+    mult = _get_multiplier(guild_id, channel_id, role_ids)
+    gained = int(gained * mult)
+    return _apply_xp(guild_id, user_id, gained, "message")
+
+
+def add_voice_xp(guild_id: int, user_id: int, amount: int) -> tuple[int, int, bool] | None:
+    return _apply_xp(guild_id, user_id, amount, "voice")
+
+
+def _apply_xp(guild_id: int, user_id: int, amount: int, source: str) -> tuple[int, int, bool]:
+    now = datetime.now(timezone.utc).timestamp()
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
@@ -180,43 +293,96 @@ def add_xp(guild_id: int, user_id: int) -> tuple[int, int, bool]:
     )
     row = cur.fetchone()
     old_xp = row[0] if row else 0
-    new_xp = old_xp + gained
+    new_xp = old_xp + amount
     old_level = level_from_xp(old_xp)
     new_level = level_from_xp(new_xp)
     leveled_up = new_level > old_level
-    cur.execute(
-        """INSERT INTO levels (guild_id, user_id, xp, messages, last_xp)
-           VALUES (?, ?, ?, 1, ?)
-           ON CONFLICT(guild_id, user_id) DO UPDATE SET
-             xp = xp + ?,
-             messages = messages + 1,
-             last_xp = ?""",
-        (guild_id, user_id, new_xp, now, gained, now),
-    )
+    if source == "message":
+        cur.execute(
+            """INSERT INTO levels (guild_id, user_id, xp, messages, last_xp)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                 xp = xp + ?,
+                 messages = messages + 1,
+                 last_xp = ?""",
+            (guild_id, user_id, new_xp, now, amount, now),
+        )
+    else:
+        cur.execute(
+            """INSERT INTO levels (guild_id, user_id, xp, voice_minutes, last_xp)
+               VALUES (?, ?, ?, 1, ?)
+               ON CONFLICT(guild_id, user_id) DO UPDATE SET
+                 xp = xp + ?,
+                 voice_minutes = voice_minutes + 1,
+                 last_xp = ?""",
+            (guild_id, user_id, new_xp, now, amount, now),
+        )
     conn.commit()
     conn.close()
     return new_xp, new_level, leveled_up
+
+
+async def handle_level_up(member: discord.Member, channel: discord.TextChannel, level: int):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT role_id FROM role_rewards WHERE guild_id = ? AND level = ?",
+        (member.guild.id, level),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    roles_added = []
+    for (role_id,) in rows:
+        role = member.guild.get_role(role_id)
+        if role and role not in member.roles:
+            try:
+                await member.add_roles(role)
+                roles_added.append(role.mention)
+            except Exception:
+                pass
+    enabled = _get_setting(member.guild.id, "levelup_enabled", "true").lower()
+    if enabled != "true":
+        return
+    levelup_channel_id = _get_setting(member.guild.id, "levelup_channel")
+    target_channel = channel
+    if levelup_channel_id:
+        ch = member.guild.get_channel(int(levelup_channel_id))
+        if ch:
+            target_channel = ch
+    msg = f":tada: GG {member.mention}, you reached **Level {level}**!"
+    if roles_added:
+        msg += f"\n:medal: Reward: {', '.join(roles_added)}"
+    try:
+        await target_channel.send(msg, delete_after=15)
+    except Exception:
+        pass
 
 
 def get_rank(guild_id: int, user_id: int) -> dict | None:
     conn = get_db()
     cur = conn.cursor()
     cur.execute(
-        "SELECT xp FROM levels WHERE guild_id = ? AND user_id = ?",
+        "SELECT xp, messages, voice_minutes FROM levels WHERE guild_id = ? AND user_id = ?",
         (guild_id, user_id),
     )
     row = cur.fetchone()
     if not row:
         conn.close()
         return None
-    xp = row[0]
+    xp, messages, voice_minutes = row
     cur.execute(
         "SELECT COUNT(*) FROM levels WHERE guild_id = ? AND xp > ?",
         (guild_id, xp),
     )
     rank = cur.fetchone()[0] + 1
     conn.close()
-    return {"xp": xp, "level": level_from_xp(xp), "rank": rank}
+    return {
+        "xp": xp,
+        "level": level_from_xp(xp),
+        "rank": rank,
+        "messages": messages,
+        "voice_minutes": voice_minutes,
+    }
 
 
 def get_leaderboard(guild_id: int, limit: int = 10) -> list[tuple[int, int, int]]:
@@ -246,6 +412,7 @@ CHAT_CAPABILITIES = """
 MY CAPABILITIES:
 - Play music: /play <song name>, /play <YouTube URL>. Also /skip /stop /queue /pause /resume /volume.
 - Search the web: /search <query>, or ask me anything and I will search if I need current info.
+- Leveling system: /rank, /leaderboard, XP for messages and voice, role rewards, multipliers, blacklists.
 - Generate ANY file: /lua, /script, /file, or just say "make me a .file type..."
 - Create .exe source with compile instructions
 - Read & summarize channels: /read #channel
@@ -562,6 +729,7 @@ class CodeBot(commands.Bot):
                 print(f"Wavelink failed {node.uri}: {e}")
         else:
             print("WARNING: Could not connect to any public Lavalink node.")
+        self.voice_xp_task.start()
 
     async def on_ready(self):
         activity = discord.Activity(
@@ -598,6 +766,29 @@ class CodeBot(commands.Bot):
             print(f"Synced commands to new guild: {guild.name}")
         except Exception as e:
             print(f"Failed to sync to new guild {guild.name}: {e}")
+
+    @commands.loop(minutes=1)
+    async def voice_xp_task(self):
+        try:
+            for guild in self.guilds:
+                for vc in guild.voice_channels:
+                    for member in vc.members:
+                        if member.bot or member.voice.mute or member.voice.deaf:
+                            continue
+                        role_ids = [r.id for r in member.roles]
+                        if _is_blacklisted(guild.id, vc.id, role_ids):
+                            continue
+                        mult = _get_multiplier(guild.id, vc.id, role_ids)
+                        amount = int(10 * mult)
+                        result = add_voice_xp(guild.id, member.id, amount)
+                        if result:
+                            xp, level, leveled_up = result
+                            if leveled_up:
+                                text_ch = guild.system_channel
+                                if text_ch:
+                                    await handle_level_up(member, text_ch, level)
+        except Exception as e:
+            print(f"Voice XP task error: {e}")
 
 
 bot = CodeBot()
@@ -662,17 +853,12 @@ async def on_message(message):
         return
 
     if message.guild:
-        result = add_xp(message.guild.id, message.author.id)
+        role_ids = [r.id for r in message.author.roles]
+        result = add_message_xp(message.guild.id, message.author.id, message.channel.id, role_ids)
         if result:
             xp, level, leveled_up = result
             if leveled_up:
-                try:
-                    await message.channel.send(
-                        f":tada: GG {message.author.mention}, you reached **Level {level}**!",
-                        delete_after=10,
-                    )
-                except Exception:
-                    pass
+                await handle_level_up(message.author, message.channel, level)
 
     await bot.process_commands(message)
 
@@ -698,6 +884,8 @@ async def slash_rank(interaction: discord.Interaction, member: discord.Member = 
     embed.add_field(name="Level", value=str(data["level"]), inline=True)
     embed.add_field(name="XP", value=str(data["xp"]), inline=True)
     embed.add_field(name="Rank", value=f"#{data['rank']}", inline=True)
+    embed.add_field(name="Messages", value=str(data["messages"]), inline=True)
+    embed.add_field(name="Voice (min)", value=str(data["voice_minutes"]), inline=True)
     next_xp = xp_for_level(data["level"] + 1)
     embed.add_field(
         name="Next Level",
@@ -727,6 +915,206 @@ async def slash_leaderboard(interaction: discord.Interaction):
         color=discord.Color.gold(),
     )
     await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="setlevelchannel", description="Set where level-up messages go (Admin only)")
+@app_commands.describe(channel="Channel for level-up messages, or leave blank for current channel")
+async def slash_setlevelchannel(interaction: discord.Interaction, channel: discord.TextChannel = None):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    target = channel or interaction.channel
+    _set_setting(interaction.guild.id, "levelup_channel", target.id)
+    await interaction.response.send_message(f":white_check_mark: Level-up messages will go to {target.mention}.")
+
+
+@bot.tree.command(name="togglelevelup", description="Enable/disable level-up messages (Admin only)")
+@app_commands.describe(enabled="True or False")
+async def slash_togglelevelup(interaction: discord.Interaction, enabled: bool):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    _set_setting(interaction.guild.id, "levelup_enabled", str(enabled).lower())
+    await interaction.response.send_message(f":white_check_mark: Level-up messages: **{'ON' if enabled else 'OFF'}**.")
+
+
+@bot.tree.command(name="setxprange", description="Set min/max XP per message (Admin only)")
+@app_commands.describe(min_xp="Minimum XP", max_xp="Maximum XP")
+async def slash_setxprange(interaction: discord.Interaction, min_xp: int, max_xp: int):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    min_xp = max(1, min_xp)
+    max_xp = max(min_xp, max_xp)
+    _set_setting(interaction.guild.id, "min_xp", min_xp)
+    _set_setting(interaction.guild.id, "max_xp", max_xp)
+    await interaction.response.send_message(f":white_check_mark: XP per message set to **{min_xp}-{max_xp}**.")
+
+
+@bot.tree.command(name="setcooldown", description="Set XP cooldown in seconds (Admin only)")
+@app_commands.describe(seconds="Cooldown between messages")
+async def slash_setcooldown(interaction: discord.Interaction, seconds: int):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    seconds = max(5, seconds)
+    _set_setting(interaction.guild.id, "cooldown", seconds)
+    await interaction.response.send_message(f":white_check_mark: XP cooldown set to **{seconds} seconds**.")
+
+
+@bot.tree.command(name="addrolereward", description="Give a role when a user reaches a level (Admin only)")
+@app_commands.describe(level="Level to unlock", role="Role to give")
+async def slash_addrolereward(interaction: discord.Interaction, level: int, role: discord.Role):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO role_rewards (guild_id, level, role_id) VALUES (?, ?, ?) "
+        "ON CONFLICT(guild_id, level) DO UPDATE SET role_id = excluded.role_id",
+        (interaction.guild.id, level, role.id),
+    )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: At level **{level}**, users get {role.mention}.")
+
+
+@bot.tree.command(name="removerolereward", description="Remove a role reward (Admin only)")
+@app_commands.describe(level="Level to remove reward from")
+async def slash_removerolereward(interaction: discord.Interaction, level: int):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM role_rewards WHERE guild_id = ? AND level = ?",
+        (interaction.guild.id, level),
+    )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: Removed role reward at level **{level}**.")
+
+
+@bot.tree.command(name="blacklistchannel", description="Disable XP in a channel (Admin only)")
+@app_commands.describe(channel="Channel to blacklist")
+async def slash_blacklistchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO xp_blacklist (guild_id, target_id, target_type) VALUES (?, ?, 'channel')",
+        (interaction.guild.id, channel.id),
+    )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: XP disabled in {channel.mention}.")
+
+
+@bot.tree.command(name="whitelistchannel", description="Re-enable XP in a channel (Admin only)")
+@app_commands.describe(channel="Channel to whitelist")
+async def slash_whitelistchannel(interaction: discord.Interaction, channel: discord.TextChannel):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM xp_blacklist WHERE guild_id = ? AND target_id = ? AND target_type = 'channel'",
+        (interaction.guild.id, channel.id),
+    )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: XP enabled in {channel.mention}.")
+
+
+@bot.tree.command(name="blacklistrole", description="Disable XP for users with a role (Admin only)")
+@app_commands.describe(role="Role to blacklist")
+async def slash_blacklistrole(interaction: discord.Interaction, role: discord.Role):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO xp_blacklist (guild_id, target_id, target_type) VALUES (?, ?, 'role')",
+        (interaction.guild.id, role.id),
+    )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: XP disabled for {role.mention}.")
+
+
+@bot.tree.command(name="whitelistrole", description="Re-enable XP for users with a role (Admin only)")
+@app_commands.describe(role="Role to whitelist")
+async def slash_whitelistrole(interaction: discord.Interaction, role: discord.Role):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    conn.execute(
+        "DELETE FROM xp_blacklist WHERE guild_id = ? AND target_id = ? AND target_type = 'role'",
+        (interaction.guild.id, role.id),
+    )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: XP enabled for {role.mention}.")
+
+
+@bot.tree.command(name="addxpmultiplier", description="Boost XP in a channel/role (Admin only)")
+@app_commands.describe(multiplier="Multiplier like 1.5 or 2.0", channel="Channel to boost", role="Role to boost")
+async def slash_addxpmultiplier(
+    interaction: discord.Interaction,
+    multiplier: float,
+    channel: discord.TextChannel = None,
+    role: discord.Role = None,
+):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    if not channel and not role:
+        await interaction.response.send_message(":x: Provide a channel or role.", ephemeral=True)
+        return
+    conn = get_db()
+    if channel:
+        conn.execute(
+            "INSERT INTO xp_multipliers (guild_id, target_id, target_type, multiplier) VALUES (?, ?, 'channel', ?) "
+            "ON CONFLICT(guild_id, target_id, target_type) DO UPDATE SET multiplier = excluded.multiplier",
+            (interaction.guild.id, channel.id, multiplier),
+        )
+    if role:
+        conn.execute(
+            "INSERT INTO xp_multipliers (guild_id, target_id, target_type, multiplier) VALUES (?, ?, 'role', ?) "
+            "ON CONFLICT(guild_id, target_id, target_type) DO UPDATE SET multiplier = excluded.multiplier",
+            (interaction.guild.id, role.id, multiplier),
+        )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: XP multiplier **{multiplier}x** set.")
+
+
+@bot.tree.command(name="removexpmultiplier", description="Remove XP boost from channel/role (Admin only)")
+@app_commands.describe(channel="Channel to remove boost", role="Role to remove boost")
+async def slash_removexpmultiplier(
+    interaction: discord.Interaction,
+    channel: discord.TextChannel = None,
+    role: discord.Role = None,
+):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    conn = get_db()
+    if channel:
+        conn.execute(
+            "DELETE FROM xp_multipliers WHERE guild_id = ? AND target_id = ? AND target_type = 'channel'",
+            (interaction.guild.id, channel.id),
+        )
+    if role:
+        conn.execute(
+            "DELETE FROM xp_multipliers WHERE guild_id = ? AND target_id = ? AND target_type = 'role'",
+            (interaction.guild.id, role.id),
+        )
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f":white_check_mark: XP multiplier removed.")
 
 
 @bot.tree.command(name="hey", description="Chat with Null or ask it to create files")
