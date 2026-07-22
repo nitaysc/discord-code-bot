@@ -647,6 +647,38 @@ Output ONLY the code in a code block with language tag. No explanations outside 
 Follow best practices and proper syntax.
 """)
 
+YIMMENU_LUA_SYSTEM = textwrap.dedent("""\
+You are a YimMenuV2 Lua scripting assistant for GTA V Enhanced.
+Write Lua scripts that work with the YimMenuV2 mod menu.
+Do NOT ask clarifying questions. Use sensible defaults and write complete, working code.
+Output ONLY the code in a code block with `lua` language tag. No explanations outside the code block.
+
+Known YimMenuV2 Lua API (use these patterns):
+- script.run_in_callback(function() ... end) — entry point for async/callback code.
+- script.yield(ms) — wait/sleep inside a callback loop (1000 ms = 1 second).
+- log.info("message") — log to the console/menu log.
+- notify.success("Title", "Message") — show a success notification.
+- notify.warning("Title", "Message") — show a warning notification.
+- notify.error("Title", "Message") — show an error notification.
+- stats.set_int("STAT_NAME", value) — set an integer stat.
+- stats.set_bool("STAT_NAME", value) — set a boolean stat.
+- Use local helper functions for reusable logic.
+- Keep loops inside script.run_in_callback with script.yield() to avoid freezing.
+
+Example structure:
+```lua
+script.run_in_callback(function()
+    log.info("Script loaded")
+    notify.success("My Script", "Loaded successfully")
+
+    while true do
+        -- your logic here
+        script.yield(1000)
+    end
+end)
+```
+""")
+
 
 def extract_code_blocks(text: str) -> list[tuple[str | None, str]]:
     pattern = r"```(\w*)\n(.*?)```"
@@ -907,6 +939,17 @@ def _looks_conversational(text: str) -> bool:
     return False
 
 
+YIMMENU_KEYWORDS = {
+    "yimmenu", "yimmenuv2", "yim menu", "yim menu v2",
+    "gta v enhanced", "gtav enhanced", "gta5 enhanced", "gta enhanced",
+}
+
+
+def _is_yimmenu_request(prompt: str) -> bool:
+    lowered = prompt.lower()
+    return any(k in lowered for k in YIMMENU_KEYWORDS) and ("lua" in lowered or "script" in lowered)
+
+
 async def handle_create_request(channel, prompt: str, reply_target=None):
     file_type, file_kind = detect_file_type(prompt)
     channel_id = channel.id
@@ -949,7 +992,11 @@ async def handle_create_request(channel, prompt: str, reply_target=None):
         return
 
     is_code_type = file_type in LANG_EXTENSIONS or file_type is None
-    system = CODE_SYSTEM if is_code_type else CHAT_SYSTEM
+    if is_code_type and _is_yimmenu_request(prompt):
+        system = YIMMENU_LUA_SYSTEM
+        file_type = "lua"
+    else:
+        system = CODE_SYSTEM if is_code_type else CHAT_SYSTEM
     text = await call_ai(system, prompt, history, temperature=0.2)
 
     code_blocks = extract_code_blocks(text)
