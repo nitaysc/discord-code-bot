@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import textwrap
 from collections import deque
@@ -665,7 +666,7 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
 
     try:
         ytdl_cmd = [
-            "yt-dlp", song["url"],
+            sys.executable, "-m", "yt_dlp", song["url"],
             "-f", "bestaudio/best",
             "-o", "-",
             "-q", "--no-warnings",
