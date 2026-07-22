@@ -662,8 +662,9 @@ CRITICAL API RULES — never violate these:
 - PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
 - PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
 - For interactive toggle/button scripts, always create a menu: menu.set_menu_name, menu.get_submenu, add_category, add_group, then add the command to the group with group:add_command(id).
-- For one-off actions (like instant brake, kill player, give money, etc.), ALWAYS use commandmgr.add_command (a button) instead of add_looped_command. A looped command for braking will freeze the car and prevent driving forward.
+- For one-off actions (like instant brake, kill player, give money, etc.), ALWAYS use group:add_button(label, desc, callback) instead of add_looped_command. A looped command for braking will freeze the car and prevent driving forward.
 - Do NOT use INPUT/PAD/CONTROLS key natives unless you are 100% certain of the exact namespace, because wrong native names will crash the script.
+- Use PED.IS_PED_IN_ANY_VEHICLE(ped, true) to check if the player is in a vehicle.
 
 Known YimMenuV2 Lua API:
 - natives.load_natives() — call once at the top if using GTA natives.
@@ -698,16 +699,16 @@ local group = category:add_group("Buttons")
 
 local function do_action()
     local ped = PLAYER.PLAYER_PED_ID()
-    if ped ~= 0 and PED.IS_PED_IN_ANY_VEHICLE(ped, false) then
+    if ped ~= 0 and PED.IS_PED_IN_ANY_VEHICLE(ped, true) then
         local vehicle = PED.GET_VEHICLE_PED_IS_IN(ped, false)
         if vehicle ~= 0 then
             -- action here
+            notify.success("My Script", "Done")
         end
     end
 end
 
-commandmgr.add_command("my_action", "My Action", "Does something once", do_action)
-group:add_command("my_action")
+group:add_button("My Action", "Does something once", do_action)
 ```
 """)
 
@@ -1186,7 +1187,15 @@ async def on_message(message):
     )
     is_dm = isinstance(message.channel, discord.DMChannel)
 
-    if is_mention or is_dm:
+    is_reply_to_bot = False
+    if bot.user is not None and message.reference and message.reference.message_id:
+        try:
+            ref_msg = await message.channel.fetch_message(message.reference.message_id)
+            is_reply_to_bot = ref_msg.author.id == bot.user.id
+        except Exception:
+            is_reply_to_bot = False
+
+    if is_mention or is_dm or is_reply_to_bot:
         content = message.content
         for uid in [bot.user.id] + [m.id for m in message.mentions]:
             content = content.replace(f"<@{uid}>", "").replace(f"<@!{uid}>", "")
