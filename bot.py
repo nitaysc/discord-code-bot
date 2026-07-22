@@ -408,6 +408,29 @@ async def fetch_avatar(url: str) -> bytes:
             return await resp.read()
 
 
+async def read_attachment(att: discord.Attachment, max_bytes: int = 50000) -> tuple[str, str] | None:
+    try:
+        if att.size > max_bytes:
+            return None
+        binary_exts = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".mp3", ".mp4", ".wav", ".avi", ".mkv", ".pdf", ".exe", ".dll", ".zip", ".rar", ".7z"}
+        if any(str(att.filename).lower().endswith(e) for e in binary_exts):
+            return None
+        async with aiohttp.ClientSession() as session:
+            async with session.get(att.url) as resp:
+                data = await resp.read()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                text = data.decode("utf-8", errors="replace")
+            except Exception:
+                return None
+        return att.filename, text[:4000]
+    except Exception as e:
+        print(f"Failed to read attachment {att.filename}: {e}")
+        return None
+
+
 def _get_font(size: int):
     for font_name in ["arial.ttf", "DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
         try:
@@ -498,6 +521,7 @@ MY CAPABILITIES:
 - Kick/vkick/say/clear: admin commands
 - Normal chat, coding help, answering questions
 - See images: attach an image and ask about it
+- Read files: drop a .lua, .txt, .py, .json, or any text file and ask about it
 - Voice features coming soon (speech-to-text and text-to-speech)
 - I remember the last 50 messages in each channel
 
@@ -944,26 +968,40 @@ async def on_message(message):
         print(f"[CHAT] {message.author}: {content}")
 
         image_urls = []
+        file_contexts = []
         for att in message.attachments:
             if att.content_type and att.content_type.startswith("image/"):
                 image_urls.append(att.url)
+            else:
+                file_data = await read_attachment(att)
+                if file_data:
+                    filename, file_text = file_data
+                    file_contexts.append(f"[Attached file `{filename}`:\n```\n{file_text}\n```]")
 
         channel_id = message.channel.id
         display_name = message.author.display_name
         history_entry = f"{display_name}: {content}"
         if image_urls:
             history_entry += f" [attached {len(image_urls)} image(s)]"
+        if file_contexts:
+            history_entry += f" [attached {len(file_contexts)} file(s)]"
         add_to_history(channel_id, "user", history_entry)
 
         async with message.channel.typing():
             try:
+                file_extra = "\n\n".join(file_contexts)
                 if is_create_request(content):
-                    await handle_create_request(message.channel, content, reply_target=message)
+                    full_prompt = content
+                    if file_extra:
+                        full_prompt += f"\n\n{file_extra}"
+                    await handle_create_request(message.channel, full_prompt, reply_target=message)
                 else:
                     context_extra = ""
                     content_lower = content.lower()
                     if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk"]):
                         context_extra = f"\n\n[Server voice info: {get_voice_info(message.guild)}]"
+                    if file_extra:
+                        context_extra += f"\n\n{file_extra}"
 
                     history = get_history(channel_id)
                     prompt = content + context_extra
