@@ -347,9 +347,9 @@ intents.presences = False
 class CodeBot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix="!", intents=intents)
+        self._synced_once = False
 
     async def setup_hook(self):
-        await self.tree.sync()
         nodes = [
             wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
             wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
@@ -374,13 +374,23 @@ class CodeBot(commands.Bot):
         )
         await self.change_presence(activity=activity, status=discord.Status.online)
         print(f"Online as {self.user}")
+        if self._synced_once:
+            return
+        self._synced_once = True
         for guild in self.guilds:
             try:
+                self.tree.clear_commands(guild=guild)
                 self.tree.copy_global_to(guild=guild)
                 await self.tree.sync(guild=guild)
                 print(f"Synced commands to guild: {guild.name}")
             except Exception as e:
                 print(f"Failed to sync to {guild.name}: {e}")
+        try:
+            self.tree.clear_commands(guild=None)
+            await self.tree.sync()
+            print("Cleared global commands to avoid duplicates")
+        except Exception as e:
+            print(f"Failed to clear global commands: {e}")
 
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         print(f"Lavalink node ready: {payload.node.uri}")
@@ -732,6 +742,7 @@ async def slash_play(interaction: discord.Interaction, query: str):
         if not tracks:
             await interaction.followup.send(":x: No tracks found.")
             return
+        player.autoplay = wavelink.AutoPlayMode.partial
         if isinstance(tracks, wavelink.Playlist):
             added = await player.queue.put_wait(tracks)
             await interaction.followup.send(f":cd: Added playlist `{tracks.name}` ({added} tracks)")
@@ -791,10 +802,14 @@ async def slash_queue(interaction: discord.Interaction):
     if not player:
         await interaction.response.send_message(":x: Not in voice.", ephemeral=True)
         return
-    if not player.queue:
-        await interaction.response.send_message(":x: Queue is empty.")
-        return
-    lines = [f"{i+1}. `{t.title}` by `{t.author}" for i, t in enumerate(player.queue[:20])]
+    lines = []
+    if player.current:
+        lines.append(f":arrow_forward: Now playing: `{player.current.title}` by `{player.current.author}`")
+    if player.queue:
+        for i, t in enumerate(player.queue[:20]):
+            lines.append(f"{i+1}. `{t.title}` by `{t.author}`")
+    else:
+        lines.append(":x: Queue is empty.")
     await interaction.response.send_message(f":scroll: **Queue:**\n" + "\n".join(lines))
 
 
