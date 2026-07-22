@@ -4084,6 +4084,10 @@ async def slash_tv_setup(interaction: discord.Interaction, channel: discord.Voic
         await interaction.response.send_message(":x: Admin only.", ephemeral=True)
         return
 
+    if _is_creator_channel(channel.id):
+        await interaction.response.send_message(f":x: **{channel.name}** is already a creator channel.", ephemeral=True)
+        return
+
     conn = get_db()
     try:
         conn.execute(
@@ -4092,8 +4096,9 @@ async def slash_tv_setup(interaction: discord.Interaction, channel: discord.Voic
         )
         conn.commit()
         await interaction.response.send_message(f":white_check_mark: **{channel.name}** is now a creator channel! Join it to spawn a temp voice channel.", ephemeral=False)
-    except Exception:
-        await interaction.response.send_message(f":x: **{channel.name}** is already a creator channel.", ephemeral=True)
+    except Exception as e:
+        print(f"[TEMP VOICE] setup error for {channel.id}: {e}")
+        await interaction.response.send_message(f":x: Failed to set **{channel.name}** as creator: `{e}`", ephemeral=True)
     finally:
         conn.close()
 
