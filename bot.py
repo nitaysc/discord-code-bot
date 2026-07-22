@@ -257,9 +257,34 @@ def _extract_valorant_profiles_from_search(text: str, query_name: str) -> list[t
 
 
 async def search_valorant_profiles(name: str) -> list[tuple[str, str]]:
-    query = f"site:tracker.gg/valorant/profile/riot {name}"
-    results_text = await web_search(query, max_results=8)
-    return _extract_valorant_profiles_from_search(results_text, name)
+    """Search for Valorant profiles using multiple web queries and combine results."""
+    queries = [
+        f"site:tracker.gg/valorant/profile/riot \"{name}\"",
+        f"site:tracker.gg/valorant/profile/riot {name}",
+        f"tracker.gg valorant {name} profile",
+        f"\"{name}\" valorant tracker",
+    ]
+    seen = set()
+    found: list[tuple[str, str]] = []
+    for query in queries:
+        try:
+            results_text = await web_search(query, max_results=10)
+            for pname, ptag in _extract_valorant_profiles_from_search(results_text, name):
+                key = (pname.lower(), ptag.lower())
+                if key not in seen:
+                    seen.add(key)
+                    found.append((pname, ptag))
+        except Exception as e:
+            print(f"[VALORANT SEARCH] query failed '{query}': {e}")
+    # If the user typed an exact name#tag and web search didn't find it,
+    # include it as a candidate so they can still select it.
+    if "#" in name:
+        parts = name.rsplit("#", 1)
+        exact_key = (parts[0].strip().lower(), parts[1].strip().lower())
+        if exact_key not in seen:
+            seen.add(exact_key)
+            found.insert(0, (parts[0].strip(), parts[1].strip()))
+    return found[:25]
 
 
 class ValorantProfileSelect(discord.ui.Select):
