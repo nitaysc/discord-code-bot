@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 import aiohttp
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from openai import OpenAI
 import wavelink
@@ -885,7 +885,7 @@ class CodeBot(commands.Bot):
         except Exception as e:
             print(f"Failed to sync to new guild {guild.name}: {e}")
 
-    @commands.loop(minutes=1)
+    @tasks.loop(minutes=1)
     async def voice_xp_task(self):
         try:
             for guild in self.guilds:
