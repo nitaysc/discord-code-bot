@@ -90,8 +90,10 @@ async def web_search(query: str, max_results: int = 5) -> str:
 SEARCH_TRIGGER_WORDS = {
     "latest", "current", "today", "now", "news", "weather", "price", "prices",
     "score", "scores", "update", "recent", "happened", "happening", "live",
-    "stock", "crypto", "bitcoin", "election", "who won", "who won",
+    "stock", "crypto", "bitcoin", "election", "who won",
     "release date", "when did", "how old is", "age of", "net worth",
+    "look online", "look up", "search for", "find online", "check online",
+    "what is", "how to", "where is",
     "2025", "2026", "2027",
 }
 
@@ -564,7 +566,29 @@ def detect_file_type(text: str) -> tuple[str | None, str]:
 
 def is_create_request(text: str) -> bool:
     text_lower = text.lower()
-    return any(kw in text_lower for kw in CREATE_KEYWORDS)
+    # Questions and search-like requests are not file creation
+    skip_phrases = [
+        "how to", "look online", "look up", "search for", "find online",
+        "tell me", "explain", "what is", "where is", "who is", "why is",
+        "can you", "could you", "would you", "will you",
+    ]
+    if any(p in text_lower for p in skip_phrases):
+        return False
+    if text_lower.endswith("?"):
+        return False
+    # Must have an action word
+    action_words = ["make", "create", "write", "generate", "build", "code", "script"]
+    if not any(w in text_lower for w in action_words):
+        return False
+    # Must mention a file/code/script or extension
+    file_indicators = [
+        "file", "script", "code", "program", "source",
+        ".lua", ".py", ".js", ".ts", ".html", ".css", ".c", ".cpp",
+        ".cs", ".java", ".go", ".rs", ".rb", ".php", ".swift", ".kt",
+        ".json", ".xml", ".yml", ".yaml", ".md", ".txt", ".bat",
+        ".ps1", ".vbs", ".ahk", ".sh", ".sql", ".ini", ".cfg",
+    ]
+    return any(ind in text_lower for ind in file_indicators)
 
 
 def choose_filename(file_type: str | None, content: str, index: int = 0) -> str:
@@ -714,6 +738,17 @@ GENERIC_BINARY_MSG = (
 )
 
 
+def _looks_conversational(text: str) -> bool:
+    lowered = text.lower().strip()
+    conversational_starts = [
+        "i'm unable to", "i can't", "i cannot", "i don't", "i do not",
+        "i'm not", "i am not", "sorry", "unfortunately", "i'm not sure",
+        "i don't know", "i'm afraid", "i'm happy to", "i'd be happy",
+        "i can help", "i can assist", "i'm here to",
+    ]
+    return any(lowered.startswith(p) for p in conversational_starts)
+
+
 async def handle_create_request(channel, prompt: str, reply_target=None):
     file_type, file_kind = detect_file_type(prompt)
     channel_id = channel.id
@@ -772,6 +807,13 @@ async def handle_create_request(channel, prompt: str, reply_target=None):
                     f":warning: `.{
                         blang}` is a binary format. The content above is source code."
                 )
+        return
+
+    if _looks_conversational(text):
+        if reply_target:
+            await reply_target.reply(text, mention_author=False)
+        else:
+            await channel.send(text)
         return
 
     await send_raw_file(channel, text, file_type)
