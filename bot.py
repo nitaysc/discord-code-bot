@@ -802,4 +802,52 @@ async def slash_resume(interaction: discord.Interaction):
         await interaction.response.send_message(":x: Nothing to resume.", ephemeral=True)
 
 
+@bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm)")
+@app_commands.describe(station="Station name or stream URL")
+async def slash_radio(interaction: discord.Interaction, station: str):
+    if not interaction.user.voice:
+        await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
+        return
+
+    await interaction.response.defer()
+    voice = interaction.user.voice.channel
+    voice_client = interaction.guild.voice_client
+
+    radio_urls = {
+        "lofi": "https://play.zenfm.audio/1lsmRbBhWUZtzz",
+        "jazz": "https://jazzradio.ice.infomaniak.ch/jazzradio-high.mp3",
+        "rock": "https://stream.radioparadise.com/rock-128",
+        "chill": "https://stream.radioparadise.com/mellow-128",
+        "pop": "https://stream.radioparadise.com/main-128",
+        "edm": "https://stream.radioparadise.com/dance-128",
+    }
+    url = radio_urls.get(station.lower(), station)
+    if not url.startswith("http"):
+        await interaction.followup.send(":x: Unknown station. Try: lofi, jazz, rock, chill, pop, edm, or paste a stream URL.")
+        return
+
+    if not voice_client:
+        voice_client = await voice.connect()
+    elif voice_client.channel != voice:
+        await voice_client.move_to(voice)
+
+    try:
+        source = discord.PCMVolumeTransformer(
+            discord.FFmpegPCMAudio(url, before_options="-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5")
+        )
+        voice_client.play(source)
+        await interaction.followup.send(f":radio: Playing **{station}**")
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}")
+
+
+@bot.tree.command(name="stopradio", description="Stop radio and leave voice")
+async def slash_stopradio(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc:
+        vc.stop()
+        await vc.disconnect()
+    await interaction.response.send_message(":stop_button: Stopped.")
+
+
 bot.run(TOKEN)
