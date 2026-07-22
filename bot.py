@@ -7,7 +7,8 @@ import sqlite3
 import tempfile
 import textwrap
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 import aiohttp
 import discord
@@ -195,7 +196,7 @@ async def _fetch_valorant_json(url: str) -> dict | None:
 
 
 async def get_valorant_account(name: str, tag: str) -> dict | None:
-    url = f"https://api.henrikdev.xyz/valorant/v1/account/{name}/{tag}"
+    url = f"https://api.henrikdev.xyz/valorant/v1/account/{quote(name, safe='')}/{quote(tag, safe='')}"
     data = await _fetch_valorant_json(url)
     if not data:
         return None
@@ -203,7 +204,7 @@ async def get_valorant_account(name: str, tag: str) -> dict | None:
 
 
 async def get_valorant_mmr(name: str, tag: str, region: str = "eu") -> dict | None:
-    url = f"https://api.henrikdev.xyz/valorant/v1/mmr/{region}/{name}/{tag}"
+    url = f"https://api.henrikdev.xyz/valorant/v1/mmr/{region}/{quote(name, safe='')}/{quote(tag, safe='')}"
     data = await _fetch_valorant_json(url)
     if not data:
         return None
@@ -211,7 +212,7 @@ async def get_valorant_mmr(name: str, tag: str, region: str = "eu") -> dict | No
 
 
 async def get_valorant_matches(name: str, tag: str, region: str = "eu", limit: int = 3) -> list[dict]:
-    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{name}/{tag}"
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{quote(name, safe='')}/{quote(tag, safe='')}"
     data = await _fetch_valorant_json(url)
     if not data:
         return []
@@ -1492,13 +1493,20 @@ def _extract_user_id(text: str) -> int | None:
     return None
 
 
-def _resolve_member(guild: discord.Guild, text: str) -> discord.Member | None:
+def _resolve_member(guild: discord.Guild, text: str, author: discord.Member | None = None) -> discord.Member | None:
+    text = text.strip()
+    if text.lower() == "me" and author is not None:
+        return author
     user_id = _extract_user_id(text)
     if user_id:
         return guild.get_member(user_id)
-    text_lower = text.lower().strip("@")
+    text_lower = text.lower().strip("@!#")
     for member in guild.members:
         if member.name.lower() == text_lower or member.display_name.lower() == text_lower:
+            return member
+    # Partial match fallback
+    for member in guild.members:
+        if text_lower in member.name.lower() or text_lower in member.display_name.lower():
             return member
     return None
 
@@ -1548,6 +1556,8 @@ def _guess_admin_actions(content: str) -> list[tuple[str, list[str]]]:
 
     def _clean_target(raw: str) -> str | None:
         raw = raw.strip().rstrip(",.!?")
+        if raw.lower() == "me":
+            return "me"
         if raw.lower() in stop_words:
             return None
         return raw
@@ -1603,21 +1613,21 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
     guild = message.guild
     try:
         if action == "kick" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
             return await _action_kick(message, target, reason)
 
         if action == "ban" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
             return await _action_ban(message, target, reason)
 
         if action == "timeout" and len(args) >= 2:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             duration = args[1]
             reason = args[2] if len(args) > 2 else "No reason provided"
             if not target:
@@ -1625,35 +1635,35 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
             return await _action_timeout(message, target, duration, reason)
 
         if action == "mute" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
             return await _action_mute(message, target, reason)
 
         if action == "voicemute" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
             return await _action_voicemute(message, target, reason)
 
         if action == "voiceunmute" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
             return await _action_voiceunmute(message, target, reason)
 
         if action == "deafen" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
             return await _action_deafen(message, target, reason)
 
         if action == "undeafen" and len(args) >= 1:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             reason = args[1] if len(args) > 1 else "No reason provided"
             if not target:
                 return ":x: Member not found."
@@ -1695,14 +1705,14 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
             return await _action_purge(message, args[0])
 
         if action == "addrole" and len(args) >= 2:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             role = _resolve_role(guild, args[1])
             if not target or not role:
                 return ":x: Member or role not found."
             return await _action_addrole(message, target, role)
 
         if action == "removerole" and len(args) >= 2:
-            target = _resolve_member(guild, args[0])
+            target = _resolve_member(guild, args[0], message.author)
             role = _resolve_role(guild, args[1])
             if not target or not role:
                 return ":x: Member or role not found."
