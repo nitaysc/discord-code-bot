@@ -181,22 +181,96 @@ async def call_ai(system: str, prompt: str, temperature: float = 0.5, max_tokens
     return await asyncio.to_thread(_call_ai, system, prompt, temperature, max_tokens)
 
 
+BINARY_ALTERNATIVES = {
+    "exe": {
+        "lang": "python", "ext": ".py",
+        "instructions": (
+            ":hammer: **To turn this into a real .exe:**\n"
+            "```cmd\npip install pyinstaller\npyinstaller --onefile --noconsole script.py\n```\n"
+            "Your .exe will be in the `dist\\` folder."
+        ),
+    },
+    "apk": {
+        "lang": "kotlin", "ext": ".kt",
+        "instructions": (
+            ":hammer: **To build this into an Android .apk:**\n"
+            "1. Install Android Studio\n"
+            "2. Create a new project, paste this code into `MainActivity.kt`\n"
+            "3. Build > Build Bundle(s) / APK(s) > Build APK(s)"
+        ),
+    },
+    "msi": {
+        "lang": "python", "ext": ".py",
+        "instructions": (
+            ":hammer: **To create a .msi installer from this Python script:**\n"
+            "```cmd\npip install cx_freeze\ncxfreeze script.py --target-dir dist\n```"
+        ),
+    },
+    "dll": {
+        "lang": "c", "ext": ".c",
+        "instructions": (
+            ":hammer: **To compile this into a .dll:**\n"
+            "```cmd\ncl /LD script.c /Fe:output.dll\n```\n"
+            "Requires Visual Studio Build Tools."
+        ),
+    },
+    "zip": {
+        "lang": "python", "ext": ".py",
+        "instructions": (
+            ":package: Save this script and run it — it'll generate the .zip file for you."
+        ),
+    },
+    "iso": {
+        "lang": "bash", "ext": ".sh",
+        "instructions": (
+            ":cd: This requires system tools (mkisofs/genisoimage). Run this script on a Linux system."
+        ),
+    },
+}
+
+GENERIC_BINARY_MSG = (
+    ":hammer: **To turn this into a _{ftype}_ file, compile it with:**\n"
+    "```cmd\n# Install build tools, then run the appropriate compiler for this source\n```"
+)
+
+
 async def handle_create_request(channel, prompt: str, reply_target=None):
     file_type, file_kind = detect_file_type(prompt)
 
     if file_kind == "binary":
-        msg = (
-            f":x: I can't create `.{
-                file_type}` files — that's a binary format.\n"
-            f"Try asking for source code instead! For example:\n"
-            f"- `make me a .bat file that opens a message`\n"
-            f"- `write a Python script that does X`\n"
-            f"- `create a PowerShell .ps1 script`"
-        )
-        if reply_target:
-            await reply_target.reply(msg, mention_author=False)
+        alt = BINARY_ALTERNATIVES.get(file_type)
+        if alt:
+            source_prompt = prompt.replace(
+                f".{file_type}", f"python script"
+            ).replace(file_type, "Python script")
+            text = await call_ai(CODE_SYSTEM, source_prompt, temperature=0.2)
+            code_blocks = extract_code_blocks(text)
+            if code_blocks:
+                msg = f":white_check_mark: Here's the source for your .{file_type}:\n{alt['instructions']}"
+                if reply_target:
+                    await reply_target.reply(msg, mention_author=False)
+                else:
+                    await channel.send(msg)
+                await send_files(channel, code_blocks, alt["lang"])
+            else:
+                filename = choose_filename(alt["lang"], text)
+                tmp = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=f"_{filename}", delete=False, encoding="utf-8"
+                )
+                tmp.write(text)
+                tmp.close()
+                msg = f":white_check_mark: Source for your .{file_type}:\n{alt['instructions']}"
+                if reply_target:
+                    await reply_target.reply(msg, mention_author=False, file=discord.File(tmp.name, filename=filename))
+                else:
+                    await channel.send(msg, file=discord.File(tmp.name, filename=filename))
+                os.unlink(tmp.name)
         else:
-            await channel.send(msg)
+            msg = GENERIC_BINARY_MSG.replace("_{ftype}_", file_type)
+            if reply_target:
+                await reply_target.reply(msg, mention_author=False)
+            else:
+                await channel.send(msg)
         return
 
     is_code_type = file_type in LANG_EXTENSIONS or file_type is None
@@ -344,11 +418,7 @@ async def slash_file(interaction: discord.Interaction, file_type: str, descripti
     await interaction.response.defer()
     ftype = file_type.lower().lstrip(".")
     if ftype in BINARY_TYPES:
-        await interaction.followup.send(
-            f":x: `.{
-                ftype}` is a binary format — I can only create text-based files.\n"
-            f"Try: bat, ps1, py, js, html, json, csv, txt, xml, ini, reg, etc."
-        )
+        await handle_create_request(interaction.channel, f".{ftype} {description}")
         return
     try:
         prompt = f"Create a .{ftype} file that: {description}"
