@@ -671,7 +671,15 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
                 raise ValueError("No playable URL found")
 
         song["title"] = title
-        source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTS)
+
+        ffmpeg_opts = dict(FFMPEG_OPTS)
+        if info.get("http_headers"):
+            headers = "".join(f"{k}: {v}\r\n" for k, v in info["http_headers"].items())
+            ffmpeg_opts["before_options"] = (
+                f'{ffmpeg_opts["before_options"]} -headers "{headers}"'
+            )
+
+        source = discord.FFmpegPCMAudio(audio_url, **ffmpeg_opts)
         voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
             play_next(guild, voice_client), bot.loop
         ))
