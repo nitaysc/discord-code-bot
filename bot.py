@@ -678,13 +678,12 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
         tmp.close()
 
         dl_opts = {
-            "format": "bestaudio/best",
+            "format": "bestaudio",
             "quiet": True,
             "no_warnings": True,
             "outtmpl": tmp.name,
             "default_search": "ytsearch",
-            "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["android"]}},
-            "postprocessors": [{"key": "FFmpegExtractAudio", "preferredcodec": "opus"}],
+            "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["ios", "web"]}},
         }
         with yt_dlp.YoutubeDL(dl_opts) as ydl:
             ydl.download([song["url"]])
