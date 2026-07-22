@@ -14,19 +14,15 @@ from openai import OpenAI
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
-OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
-MODEL = os.getenv("OPENROUTER_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-if not TOKEN or not OPENROUTER_KEY:
-    raise RuntimeError("Missing DISCORD_TOKEN or OPENROUTER_API_KEY in .env file")
+if not TOKEN or not GEMINI_KEY:
+    raise RuntimeError("Missing DISCORD_TOKEN or GEMINI_API_KEY in .env file")
 
 client = OpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=OPENROUTER_KEY,
-    default_headers={
-        "HTTP-Referer": "http://localhost",
-        "X-Title": "Discord Code Bot",
-    },
+    base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+    api_key=GEMINI_KEY,
 )
 
 LANG_EXTENSIONS = {
@@ -58,7 +54,7 @@ CREATE_KEYWORDS = [
     "program", "file", "give me", "send me", "show me", "output",
 ]
 
-MAX_HISTORY = 20
+MAX_HISTORY = 50
 message_history: dict[int, deque[dict]] = {}
 
 
@@ -181,11 +177,22 @@ async def send_raw_file(channel, content: str, file_type: str | None):
 
 
 def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
-              temperature: float = 0.5, max_tokens: int = 4096) -> str:
+              temperature: float = 0.5, max_tokens: int = 4096,
+              image_urls: list[str] | None = None) -> str:
     messages = [{"role": "system", "content": system}]
     if history:
         messages.extend(history)
-    messages.append({"role": "user", "content": prompt})
+
+    if image_urls:
+        content_parts = [{"type": "text", "text": prompt}]
+        for url in image_urls:
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {"url": url},
+            })
+        messages.append({"role": "user", "content": content_parts})
+    else:
+        messages.append({"role": "user", "content": prompt})
 
     response = client.chat.completions.create(
         model=MODEL,
@@ -197,8 +204,9 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
-                  temperature: float = 0.5, max_tokens: int = 4096) -> str:
-    return await asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens)
+                  temperature: float = 0.5, max_tokens: int = 4096,
+                  image_urls: list[str] | None = None) -> str:
+    return await asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls)
 
 
 BINARY_ALTERNATIVES = {
@@ -364,8 +372,17 @@ async def on_message(message):
 
         print(f"[CHAT] {message.author}: {content}")
 
+        image_urls = []
+        for att in message.attachments:
+            if att.content_type and att.content_type.startswith("image/"):
+                image_urls.append(att.url)
+
         channel_id = message.channel.id
-        add_to_history(channel_id, "user", f"{message.author.display_name}: {content}")
+        display_name = message.author.display_name
+        history_entry = f"{display_name}: {content}"
+        if image_urls:
+            history_entry += f" [attached {len(image_urls)} image(s)]"
+        add_to_history(channel_id, "user", history_entry)
 
         async with message.channel.typing():
             try:
@@ -373,7 +390,8 @@ async def on_message(message):
                     await handle_create_request(message.channel, content, reply_target=message)
                 else:
                     history = get_history(channel_id)
-                    answer = await call_ai(CHAT_SYSTEM, content, history, temperature=0.7)
+                    answer = await call_ai(CHAT_SYSTEM, content, history, temperature=0.7,
+                                          image_urls=image_urls if image_urls else None)
                     add_to_history(channel_id, "assistant", answer)
                     code_blocks = extract_code_blocks(answer)
                     await message.reply(answer, mention_author=False)
