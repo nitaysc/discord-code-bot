@@ -1,9 +1,12 @@
 import asyncio
 import os
+import random
 import re
+import sqlite3
 import tempfile
 import textwrap
 from collections import deque
+from datetime import datetime, timezone
 
 import discord
 from discord import app_commands
@@ -128,6 +131,104 @@ CREATE_KEYWORDS = [
 
 MAX_HISTORY = 50
 message_history: dict[int, deque[dict]] = {}
+
+DB_PATH = os.path.join(os.path.dirname(__file__), "bot.db")
+
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS levels (
+            guild_id INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            xp INTEGER DEFAULT 0,
+            messages INTEGER DEFAULT 0,
+            last_xp REAL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        )"""
+    )
+    conn.commit()
+    return conn
+
+
+def xp_for_level(level: int) -> int:
+    return int(100 * (level ** 1.8))
+
+
+def level_from_xp(xp: int) -> int:
+    level = 0
+    while xp_for_level(level + 1) <= xp:
+        level += 1
+    return level
+
+
+_xp_cooldowns: dict[tuple[int, int], float] = {}
+
+
+def add_xp(guild_id: int, user_id: int) -> tuple[int, int, bool]:
+    now = datetime.now(timezone.utc).timestamp()
+    key = (guild_id, user_id)
+    if key in _xp_cooldowns and now - _xp_cooldowns[key] < 30:
+        return None
+    _xp_cooldowns[key] = now
+    gained = random.randint(15, 25)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT xp FROM levels WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    row = cur.fetchone()
+    old_xp = row[0] if row else 0
+    new_xp = old_xp + gained
+    old_level = level_from_xp(old_xp)
+    new_level = level_from_xp(new_xp)
+    leveled_up = new_level > old_level
+    cur.execute(
+        """INSERT INTO levels (guild_id, user_id, xp, messages, last_xp)
+           VALUES (?, ?, ?, 1, ?)
+           ON CONFLICT(guild_id, user_id) DO UPDATE SET
+             xp = xp + ?,
+             messages = messages + 1,
+             last_xp = ?""",
+        (guild_id, user_id, new_xp, now, gained, now),
+    )
+    conn.commit()
+    conn.close()
+    return new_xp, new_level, leveled_up
+
+
+def get_rank(guild_id: int, user_id: int) -> dict | None:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT xp FROM levels WHERE guild_id = ? AND user_id = ?",
+        (guild_id, user_id),
+    )
+    row = cur.fetchone()
+    if not row:
+        conn.close()
+        return None
+    xp = row[0]
+    cur.execute(
+        "SELECT COUNT(*) FROM levels WHERE guild_id = ? AND xp > ?",
+        (guild_id, xp),
+    )
+    rank = cur.fetchone()[0] + 1
+    conn.close()
+    return {"xp": xp, "level": level_from_xp(xp), "rank": rank}
+
+
+def get_leaderboard(guild_id: int, limit: int = 10) -> list[tuple[int, int, int]]:
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT user_id, xp FROM levels WHERE guild_id = ? ORDER BY xp DESC LIMIT ?",
+        (guild_id, limit),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [(user_id, xp, level_from_xp(xp)) for user_id, xp in rows]
 
 
 def get_history(channel_id: int) -> list[dict]:
@@ -560,7 +661,72 @@ async def on_message(message):
                 await message.reply(f":x: Error: {e}", mention_author=False)
         return
 
+    if message.guild:
+        result = add_xp(message.guild.id, message.author.id)
+        if result:
+            xp, level, leveled_up = result
+            if leveled_up:
+                try:
+                    await message.channel.send(
+                        f":tada: GG {message.author.mention}, you reached **Level {level}**!",
+                        delete_after=10,
+                    )
+                except Exception:
+                    pass
+
     await bot.process_commands(message)
+
+
+@bot.tree.command(name="rank", description="Check your XP and level")
+@app_commands.describe(member="Whose rank to check (default: you)")
+async def slash_rank(interaction: discord.Interaction, member: discord.Member = None):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    target = member or interaction.user
+    data = get_rank(interaction.guild.id, target.id)
+    if not data:
+        await interaction.response.send_message(
+            f":x: {target.mention} has no XP yet. Start chatting!", ephemeral=True
+        )
+        return
+    embed = discord.Embed(
+        title=f":chart_with_upwards_trend: {target.display_name}'s Rank",
+        color=discord.Color.blue(),
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
+    embed.add_field(name="Level", value=str(data["level"]), inline=True)
+    embed.add_field(name="XP", value=str(data["xp"]), inline=True)
+    embed.add_field(name="Rank", value=f"#{data['rank']}", inline=True)
+    next_xp = xp_for_level(data["level"] + 1)
+    embed.add_field(
+        name="Next Level",
+        value=f"{next_xp - data['xp']} XP needed",
+        inline=False,
+    )
+    await interaction.response.send_message(embed=embed)
+
+
+@bot.tree.command(name="leaderboard", description="Top 10 most active members")
+async def slash_leaderboard(interaction: discord.Interaction):
+    if not interaction.guild:
+        await interaction.response.send_message(":x: Server only.", ephemeral=True)
+        return
+    rows = get_leaderboard(interaction.guild.id, 10)
+    if not rows:
+        await interaction.response.send_message(":x: No one has XP yet.")
+        return
+    lines = []
+    for i, (user_id, xp, level) in enumerate(rows, 1):
+        member = interaction.guild.get_member(user_id)
+        name = member.display_name if member else f"User {user_id}"
+        lines.append(f"{i}. **{name}** — Level {level} ({xp} XP)")
+    embed = discord.Embed(
+        title=":trophy: Server Leaderboard",
+        description="\n".join(lines),
+        color=discord.Color.gold(),
+    )
+    await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="hey", description="Chat with Null or ask it to create files")
