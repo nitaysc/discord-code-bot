@@ -75,6 +75,11 @@ async def web_search(query: str, max_results: int = 5) -> str:
             lambda: list(DDGS().text(query, max_results=max_results))
         )
         if not results:
+            # Try news search as fallback
+            results = await asyncio.to_thread(
+                lambda: list(DDGS().news(query, max_results=max_results))
+            )
+        if not results:
             return ""
         lines = []
         for i, r in enumerate(results, 1):
@@ -84,6 +89,7 @@ async def web_search(query: str, max_results: int = 5) -> str:
             lines.append(f"[{i}] {title}\n{snippet}\n{link}")
         return "\n\n".join(lines)
     except Exception as e:
+        print(f"Web search error for '{query}': {e}")
         return f"Search error: {e}"
 
 
