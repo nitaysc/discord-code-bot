@@ -28,6 +28,7 @@ CLOUDFLARE_ACCOUNT = os.getenv("CLOUDFLARE_ACCOUNT_ID")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
+HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
 AI_KEY = GITHUB_TOKEN or OPENROUTER_KEY or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
 MODEL = os.getenv("AI_MODEL", "gpt-4o-mini")
 if MODEL.startswith("AI_MODEL="):
@@ -183,9 +184,12 @@ async def web_search(query: str, max_results: int = 5) -> str:
 
 
 async def _fetch_valorant_json(url: str) -> dict | None:
+    headers = {}
+    if HENRIKDEV_KEY:
+        headers["Authorization"] = HENRIKDEV_KEY
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get(url) as resp:
+            async with session.get(url, headers=headers) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 print(f"[VALORANT] HTTP {resp.status} for {url}")
@@ -3223,7 +3227,17 @@ async def slash_valorant(interaction: discord.Interaction, name: str, tag: str):
 
     account = await get_valorant_account(name, tag)
     if not account:
-        await interaction.followup.send(f":x: Couldn't find **{name}#{tag}**. Check the name/tag and try again.")
+        # Fallback: provide tracker.gg link when API fails or no key
+        msg = (
+            f":x: Couldn't load live stats for **{name}#{tag}** from the Valorant API.\n"
+            f"View their tracker profile here: {_valorant_tracker_url(name, tag)}"
+        )
+        if not HENRIKDEV_KEY:
+            msg += (
+                "\n\nTo enable live stats, get a free Henrik Dev API key at "
+                "<https://docs.henrikdev.xyz/valorant.html> and set it as `HENRIKDEV_API_KEY`."
+            )
+        await interaction.followup.send(msg)
         return
 
     region = "eu"
@@ -3264,6 +3278,10 @@ async def slash_valorant(interaction: discord.Interaction, name: str, tag: str):
     await interaction.followup.send(embed=embed)
 
 
+def _valorant_tracker_url(name: str, tag: str) -> str:
+    return f"https://tracker.gg/valorant/profile/riot/{quote(name, safe='')}%23{quote(tag, safe='')}/overview"
+
+
 @bot.tree.command(name="valorantmmr", description="Look up detailed Valorant MMR/rank info")
 @app_commands.describe(name="Player name", tag="Player tag (without #)", region="Region: na, eu, ap, kr, latam, br")
 async def slash_valorantmmr(interaction: discord.Interaction, name: str, tag: str, region: str = "eu"):
@@ -3276,7 +3294,16 @@ async def slash_valorantmmr(interaction: discord.Interaction, name: str, tag: st
 
     mmr = await get_valorant_mmr(name, tag, region)
     if not mmr:
-        await interaction.followup.send(f":x: Couldn't load MMR for **{name}#{tag}** in {region.upper()}.")
+        msg = (
+            f":x: Couldn't load live MMR for **{name}#{tag}**.\n"
+            f"View their tracker profile: {_valorant_tracker_url(name, tag)}"
+        )
+        if not HENRIKDEV_KEY:
+            msg += (
+                "\n\nTo enable live stats, add a free `HENRIKDEV_API_KEY` from "
+                "<https://docs.henrikdev.xyz/valorant.html>."
+            )
+        await interaction.followup.send(msg)
         return
 
     embed = discord.Embed(
@@ -3308,7 +3335,16 @@ async def slash_valorantmatches(interaction: discord.Interaction, name: str, tag
 
     matches = await get_valorant_matches(name, tag, region, limit=3)
     if not matches:
-        await interaction.followup.send(f":x: No recent matches found for **{name}#{tag}** in {region.upper()}.")
+        msg = (
+            f":x: Couldn't load live matches for **{name}#{tag}**.\n"
+            f"View their tracker profile: {_valorant_tracker_url(name, tag)}"
+        )
+        if not HENRIKDEV_KEY:
+            msg += (
+                "\n\nTo enable live stats, add a free `HENRIKDEV_API_KEY` from "
+                "<https://docs.henrikdev.xyz/valorant.html>."
+            )
+        await interaction.followup.send(msg)
         return
 
     lines = []
