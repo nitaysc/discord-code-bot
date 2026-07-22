@@ -672,6 +672,14 @@ async def answer_with_web_search_if_needed(
     needs_search, search_query = should_search(prompt)
     if needs_search:
         search_results = await web_search(search_query, max_results=5)
+        if not search_results:
+            # Try a shorter keyword-based query
+            simple_query = " ".join(
+                w for w in search_query.split()
+                if w.lower() not in {"how", "to", "a", "the", "is", "are", "for", "of", "in", "on", "and", "or", "i", "you", "me", "tell", "something", "look", "online", "search", "find", "check"}
+            )
+            if simple_query and simple_query != search_query:
+                search_results = await web_search(simple_query, max_results=5)
         if search_results:
             if search_results.startswith("Search error:"):
                 enhanced_prompt = f"{prompt}\n\n[Web search failed: {search_results}]"
@@ -682,6 +690,7 @@ async def answer_with_web_search_if_needed(
                     f"Use the above search results to answer if helpful."
                 )
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
+        return "I searched online but couldn't find any relevant results for that. Try rephrasing or asking something more specific."
     return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
 
 
