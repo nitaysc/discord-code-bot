@@ -674,7 +674,9 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
             "-q", "--no-warnings",
             "--default-search", "ytsearch",
         ]
-        subprocess.run(ytdl_cmd, check=True, stderr=subprocess.DEVNULL)
+        result = subprocess.run(ytdl_cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "yt-dlp failed")
         source = discord.PCMVolumeTransformer(
             discord.FFmpegPCMAudio(tmp.name, options="-vn")
         )
