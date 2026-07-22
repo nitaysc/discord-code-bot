@@ -1,6 +1,7 @@
 import asyncio
 import os
 import re
+import subprocess
 import tempfile
 import textwrap
 from collections import deque
@@ -625,7 +626,14 @@ YTDL_OPTS = {
     "noplaylist": True,
     "default_search": "ytsearch",
     "extract_flat": "in_playlist",
-    "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["android"]}},
+}
+
+YTDL_STREAM_OPTS = {
+    "format": "bestaudio/best",
+    "quiet": True,
+    "no_warnings": True,
+    "output": "-",
+    "default_search": "ytsearch",
 }
 
 FFMPEG_OPTS = {
@@ -656,25 +664,16 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
     music_current[guild.id] = song
 
     try:
-        audio_url = song.get("audio_url")
-        if not audio_url:
-            with yt_dlp.YoutubeDL(YTDL_OPTS) as ydl:
-                info = ydl.extract_info(song["url"], download=False)
-                if "entries" in info:
-                    info = info["entries"][0]
-                audio_url = info.get("url")
-                if not audio_url and info.get("formats"):
-                    for fmt in info["formats"]:
-                        if fmt.get("acodec") != "none" and fmt.get("url"):
-                            audio_url = fmt["url"]
-                            break
-            if not audio_url:
-                raise ValueError("No playable URL found")
-        title = song.get("title", "Unknown")
-        song["title"] = title
-
+        ytdl_cmd = [
+            "yt-dlp", song["url"],
+            "-f", "bestaudio/best",
+            "-o", "-",
+            "-q", "--no-warnings",
+            "--default-search", "ytsearch",
+        ]
+        proc = subprocess.Popen(ytdl_cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
         source = discord.PCMVolumeTransformer(
-            discord.FFmpegPCMAudio(audio_url)
+            discord.FFmpegPCMAudio(proc.stdout, pipe=True)
         )
         voice_client.play(source, after=lambda e: asyncio.run_coroutine_threadsafe(
             play_next(guild, voice_client), bot.loop
@@ -708,15 +707,9 @@ async def slash_play(interaction: discord.Interaction, query: str):
                 info = info["entries"][0]
             title = info.get("title", "Unknown")
             url = info.get("webpage_url", query)
-            audio_url = info.get("url")
-            if not audio_url and info.get("formats"):
-                for fmt in info["formats"]:
-                    if fmt.get("acodec") != "none" and fmt.get("url"):
-                        audio_url = fmt["url"]
-                        break
 
         queue = get_music_queue(interaction.guild_id)
-        song = {"title": title, "url": url, "audio_url": audio_url, "requester": interaction.user.display_name}
+        song = {"title": title, "url": url, "requester": interaction.user.display_name}
         queue.append(song)
 
         if not voice_client.is_playing() and interaction.guild_id not in music_current:
