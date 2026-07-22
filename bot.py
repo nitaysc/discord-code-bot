@@ -689,6 +689,10 @@ async def play_next(guild: discord.Guild, voice_client: discord.VoiceClient):
             "-o", tmp.name,
             "-q", "--no-warnings",
         ]
+        if dl_url.startswith("http"):
+            pass
+        else:
+            ytdl_cmd += ["--default-search", "ytsearch"]
         result = subprocess.run(ytdl_cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "yt-dlp failed")
@@ -730,7 +734,12 @@ async def slash_play(interaction: discord.Interaction, query: str):
             if "entries" in info:
                 info = info["entries"][0]
             title = info.get("title", "Unknown")
-            url = info.get("webpage_url", query)
+            url = info.get("webpage_url") or info.get("url") or info.get("original_url") or query
+
+        if "youtube.com" not in url and "youtu.be" not in url:
+            vid = info.get("id")
+            if vid:
+                url = f"https://www.youtube.com/watch?v={vid}"
 
         queue = get_music_queue(interaction.guild_id)
         song = {"title": title, "url": url, "requester": interaction.user.display_name}
