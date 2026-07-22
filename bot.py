@@ -467,8 +467,8 @@ def _apply_xp(guild_id: int, user_id: int, amount: int, source: str) -> tuple[in
             """INSERT INTO levels (guild_id, user_id, xp, messages, last_xp)
                VALUES (?, ?, ?, 1, ?)
                ON CONFLICT(guild_id, user_id) DO UPDATE SET
-                 xp = xp + ?,
-                 messages = messages + 1,
+                 xp = levels.xp + ?,
+                 messages = levels.messages + 1,
                  last_xp = ?""",
             (guild_id, user_id, new_xp, now, amount, now),
         )
@@ -477,8 +477,8 @@ def _apply_xp(guild_id: int, user_id: int, amount: int, source: str) -> tuple[in
             """INSERT INTO levels (guild_id, user_id, xp, voice_minutes, last_xp)
                VALUES (?, ?, ?, 1, ?)
                ON CONFLICT(guild_id, user_id) DO UPDATE SET
-                 xp = xp + ?,
-                 voice_minutes = voice_minutes + 1,
+                 xp = levels.xp + ?,
+                 voice_minutes = levels.voice_minutes + 1,
                  last_xp = ?""",
             (guild_id, user_id, new_xp, now, amount, now),
         )
