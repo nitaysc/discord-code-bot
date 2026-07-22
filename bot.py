@@ -930,26 +930,28 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="👤", custom_id="ticket_claim")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer()
         ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
         if not ticket:
-            await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send(":x: This is not a ticket channel.", ephemeral=True)
             return
         if ticket["claimed_by"]:
             claimer = interaction.guild.get_member(int(ticket["claimed_by"]))
             name = claimer.mention if claimer else "someone"
-            await interaction.response.send_message(f":x: Already claimed by {name}.", ephemeral=True)
+            await interaction.followup.send(f":x: Already claimed by {name}.", ephemeral=True)
             return
         await asyncio.to_thread(_claim_ticket, interaction.channel_id, interaction.user.id)
-        await interaction.response.send_message(f":white_check_mark: Claimed by {interaction.user.mention}")
+        await interaction.followup.send(f":white_check_mark: Claimed by {interaction.user.mention}")
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="ticket_close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         ticket = await asyncio.to_thread(_get_ticket_by_channel, interaction.channel_id)
         if not ticket:
-            await interaction.response.send_message(":x: This is not a ticket channel.", ephemeral=True)
+            await interaction.followup.send(":x: This is not a ticket channel.", ephemeral=True)
             return
         view = ConfirmCloseView()
-        await interaction.response.send_message("Are you sure you want to close this ticket?", view=view, ephemeral=True)
+        await interaction.followup.send("Are you sure you want to close this ticket?", view=view, ephemeral=True)
 
 
 class ConfirmCloseView(discord.ui.View):
