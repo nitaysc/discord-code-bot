@@ -185,11 +185,14 @@ async def web_search(query: str, max_results: int = 5) -> str:
 
 async def _fetch_valorant_json(url: str) -> dict | None:
     headers = {}
+    params = {}
     if HENRIKDEV_KEY:
+        # Henrik supports both header and query param auth
         headers["Authorization"] = HENRIKDEV_KEY
+        params["api_key"] = HENRIKDEV_KEY
     try:
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
-            async with session.get(url, headers=headers) as resp:
+            async with session.get(url, headers=headers, params=params) as resp:
                 if resp.status == 200:
                     return await resp.json()
                 print(f"[VALORANT] HTTP {resp.status} for {url}")
@@ -200,7 +203,7 @@ async def _fetch_valorant_json(url: str) -> dict | None:
 
 
 async def get_valorant_account(name: str, tag: str) -> dict | None:
-    url = f"https://api.henrikdev.xyz/valorant/v1/account/{quote(name, safe='')}/{quote(tag, safe='')}"
+    url = f"https://api.henrikdev.xyz/valorant/v2/account/{quote(name, safe='')}/{quote(tag, safe='')}"
     data = await _fetch_valorant_json(url)
     if not data:
         return None
@@ -208,7 +211,7 @@ async def get_valorant_account(name: str, tag: str) -> dict | None:
 
 
 async def get_valorant_mmr(name: str, tag: str, region: str = "eu") -> dict | None:
-    url = f"https://api.henrikdev.xyz/valorant/v1/mmr/{region}/{quote(name, safe='')}/{quote(tag, safe='')}"
+    url = f"https://api.henrikdev.xyz/valorant/v3/mmr/{region}/pc/{quote(name, safe='')}/{quote(tag, safe='')}"
     data = await _fetch_valorant_json(url)
     if not data:
         return None
@@ -216,7 +219,7 @@ async def get_valorant_mmr(name: str, tag: str, region: str = "eu") -> dict | No
 
 
 async def get_valorant_matches(name: str, tag: str, region: str = "eu", limit: int = 3) -> list[dict]:
-    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{quote(name, safe='')}/{quote(tag, safe='')}"
+    url = f"https://api.henrikdev.xyz/valorant/v4/matches/{region}/pc/{quote(name, safe='')}/{quote(tag, safe='')}"
     data = await _fetch_valorant_json(url)
     if not data:
         return []
@@ -287,19 +290,24 @@ class ValorantProfileSelect(discord.ui.Select):
             title=f"{account.get('name', name)}#{account.get('tag', tag)}",
             color=0xfa4454,
         )
-        if card.get("small"):
-            embed.set_thumbnail(url=card["small"])
-        if card.get("wide"):
-            embed.set_image(url=card["wide"])
+        if isinstance(card, dict):
+            if card.get("small"):
+                embed.set_thumbnail(url=card["small"])
+            if card.get("wide"):
+                embed.set_image(url=card["wide"])
         embed.add_field(name="Region", value=account.get("region", region).upper() or "Unknown", inline=True)
         embed.add_field(name="Account Level", value=str(account.get("account_level", "?")), inline=True)
         if mmr:
-            rank_name = mmr.get("currenttierpatched") or mmr.get("currenttier", "Unknown")
-            rr = mmr.get("ranking_in_tier", "?")
-            last_game = mmr.get("mmr_change_to_last_game", 0)
+            rank_name = (
+                mmr.get("currenttierpatched")
+                or mmr.get("tier")
+                or mmr.get("currenttier", "Unknown")
+            )
+            rr = mmr.get("ranking_in_tier") if "ranking_in_tier" in mmr else mmr.get("rr", "?")
+            last_game = mmr.get("mmr_change_to_last_game") if "mmr_change_to_last_game" in mmr else mmr.get("last_rank_change", 0)
             last_game_text = f"{last_game:+d} RR last game" if isinstance(last_game, int) else ""
             embed.add_field(name="Rank", value=f"{rank_name} — {rr} RR\n{last_game_text}", inline=False)
-            if mmr.get("images", {}).get("small"):
+            if isinstance(mmr.get("images"), dict) and mmr["images"].get("small"):
                 embed.set_thumbnail(url=mmr["images"]["small"])
         else:
             embed.add_field(name="Rank", value="Could not load ranked data.", inline=False)
@@ -3252,25 +3260,30 @@ async def slash_valorant(interaction: discord.Interaction, name: str, tag: str):
         title=f"{account.get('name', name)}#{account.get('tag', tag)}",
         color=0xfa4454,
     )
-    if card.get("small"):
-        embed.set_thumbnail(url=card["small"])
-    if card.get("wide"):
-        embed.set_image(url=card["wide"])
+    if isinstance(card, dict):
+        if card.get("small"):
+            embed.set_thumbnail(url=card["small"])
+        if card.get("wide"):
+            embed.set_image(url=card["wide"])
 
     embed.add_field(name="Region", value=account.get("region", region).upper() or "Unknown", inline=True)
     embed.add_field(name="Account Level", value=str(account.get("account_level", "?")), inline=True)
 
     if mmr:
-        rank_name = mmr.get("currenttierpatched") or mmr.get("currenttier", "Unknown")
-        rr = mmr.get("ranking_in_tier", "?")
-        last_game = mmr.get("mmr_change_to_last_game", 0)
+        rank_name = (
+            mmr.get("currenttierpatched")
+            or mmr.get("tier")
+            or mmr.get("currenttier", "Unknown")
+        )
+        rr = mmr.get("ranking_in_tier") if "ranking_in_tier" in mmr else mmr.get("rr", "?")
+        last_game = mmr.get("mmr_change_to_last_game") if "mmr_change_to_last_game" in mmr else mmr.get("last_rank_change", 0)
         last_game_text = f"{last_game:+d} RR last game" if isinstance(last_game, int) else ""
         embed.add_field(
             name="Rank",
             value=f"{rank_name} — {rr} RR\n{last_game_text}",
             inline=False,
         )
-        if mmr.get("images", {}).get("small"):
+        if isinstance(mmr.get("images"), dict) and mmr["images"].get("small"):
             embed.set_thumbnail(url=mmr["images"]["small"])
     else:
         embed.add_field(name="Rank", value="Could not load ranked data.", inline=False)
@@ -3310,14 +3323,19 @@ async def slash_valorantmmr(interaction: discord.Interaction, name: str, tag: st
         title=f"{mmr.get('name', name)}#{mmr.get('tag', tag)} — {region.upper()} Rank",
         color=0xfa4454,
     )
-    rank_name = mmr.get("currenttierpatched") or mmr.get("currenttier", "Unknown")
+    rank_name = (
+        mmr.get("currenttierpatched")
+        or mmr.get("tier")
+        or mmr.get("currenttier", "Unknown")
+    )
+    rr = mmr.get("ranking_in_tier") if "ranking_in_tier" in mmr else mmr.get("rr", "?")
     embed.add_field(name="Current Rank", value=rank_name, inline=True)
-    embed.add_field(name="RR in Tier", value=str(mmr.get("ranking_in_tier", "?")), inline=True)
+    embed.add_field(name="RR in Tier", value=str(rr), inline=True)
     embed.add_field(name="ELO", value=str(mmr.get("elo", "?")), inline=True)
-    last_game = mmr.get("mmr_change_to_last_game", 0)
+    last_game = mmr.get("mmr_change_to_last_game") if "mmr_change_to_last_game" in mmr else mmr.get("last_rank_change", 0)
     if isinstance(last_game, int):
         embed.add_field(name="Last Game", value=f"{last_game:+d} RR", inline=True)
-    if mmr.get("images", {}).get("small"):
+    if isinstance(mmr.get("images"), dict) and mmr["images"].get("small"):
         embed.set_thumbnail(url=mmr["images"]["small"])
 
     await interaction.followup.send(embed=embed)
