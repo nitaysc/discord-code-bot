@@ -232,7 +232,7 @@ CREATE_KEYWORDS = [
 MAX_HISTORY = 50
 message_history: dict[int, deque[dict]] = {}
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "bot.db")
+DB_PATH = os.getenv("DB_PATH", os.path.join(os.path.dirname(__file__), "bot.db"))
 
 
 def get_db():
