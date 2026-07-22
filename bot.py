@@ -654,29 +654,41 @@ Do NOT ask clarifying questions. Use sensible defaults and write complete, worki
 Output ONLY the code in a code block with `lua` language tag. No explanations outside the code block.
 
 Known YimMenuV2 Lua API (use these patterns):
-- script.run_in_callback(function() ... end) — entry point for async/callback code.
-- script.yield(ms) — wait/sleep inside a callback loop (1000 ms = 1 second).
-- log.info("message") — log to the console/menu log.
-- notify.success("Title", "Message") — show a success notification.
-- notify.warning("Title", "Message") — show a warning notification.
-- notify.error("Title", "Message") — show an error notification.
-- stats.set_int("STAT_NAME", value) — set an integer stat.
-- stats.set_bool("STAT_NAME", value) — set a boolean stat.
-- Use local helper functions for reusable logic.
-- Keep loops inside script.run_in_callback with script.yield() to avoid freezing.
+- natives.load_natives() — load GTA native functions at the top of the script.
+- menu.set_menu_name("My Menu") — set the script menu name.
+- local submenu = menu.get_submenu("My Menu") — get/create the submenu.
+- local category = submenu:add_category("Category") — add a category.
+- local group = category:add_group("Group") — add a group.
+- group:add_command("command_id") — add a registered command to the UI group.
+- group:add_button("id", "Label", "Description", function() ... end) — add a button.
+- commandmgr.add_command("id", "Label", "Description", function() ... end) — register a command.
+- commandmgr.add_looped_command("id", "Label", "Description", tick_fn, on_enable, on_disable) — register a toggleable looped command.
+- commandmgr.add_list_command("id", "Label", "Description", {{1,"Option"}, ...}, default_index, callback) — register a list option.
+- script.run_in_callback(function() ... end) — run async/callback code.
+- script.yield(ms) — wait/sleep (1000 ms = 1 second). Always yield in loops.
+- log.info("message") — log to console.
+- notify.success("Title", "Message"), notify.info(...), notify.error(...), notify.warning(...) — notifications.
+- stats.get_int("STAT_NAME"), stats.set_int("STAT_NAME", value), stats.set_bool("STAT_NAME", value) — stats.
+- util.joaat("MODEL_NAME") — joaat hash of a model name.
+- PLAYER.PLAYER_PED_ID(), PLAYER.PLAYER_ID() — get player ped/player id.
+- ENTITY.GET_ENTITY_COORDS(ent, true), ENTITY.GET_ENTITY_MODEL(ent), ENTITY.SET_ENTITY_HEALTH(ent, health, attacker, unk)
+- ENTITY.SET_ENTITY_ROTATION(ent, pitch, roll, yaw, unk, bool)
+- VEHICLE.CREATE_VEHICLE(hash, x, y, z, heading, networked, bool, bool)
+- VEHICLE.SET_VEHICLE_ENGINE_ON(veh, true, true, false)
+- PED.CREATE_PED(type, hash, x, y, z, heading, networked, bool)
+- PED.SET_PED_TO_RAGDOLL(ped, time1, time2, type, bool, bool, bool)
+- PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn)
+- STREAMING.REQUEST_MODEL(hash, false), STREAMING.HAS_MODEL_LOADED(hash), STREAMING.SET_MODEL_AS_NO_LONGER_NEEDED(hash)
+- entities.get_all_peds_as_handles() — get all ped handles.
+- Entity(handle) with :is_valid(), :get_velocity(), :set_velocity(Vector3(x,y,z))
+- Vector3(x, y, z)
+- FIRE.ADD_EXPLOSION(x, y, z, type, damage, audible, invisible, shake, nodamage)
 
-Example structure:
-```lua
-script.run_in_callback(function()
-    log.info("Script loaded")
-    notify.success("My Script", "Loaded successfully")
-
-    while true do
-        -- your logic here
-        script.yield(1000)
-    end
-end)
-```
+Rules:
+- Use natives.load_natives() when using GTA native functions (PLAYER, ENTITY, VEHICLE, PED, STREAMING, FIRE, etc.).
+- Request and wait for models with STREAMING.REQUEST_MODEL + STREAMING.HAS_MODEL_LOADED loop + script.yield(0).
+- Always call script.yield() inside while loops.
+- Prefer commandmgr + menu groups for interactive scripts.
 """)
 
 
