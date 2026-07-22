@@ -661,6 +661,7 @@ CRITICAL API RULES — never violate these:
 - For a true instant vehicle stop, always use BOTH `VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, 0)` AND `ENTITY.SET_ENTITY_VELOCITY(veh, 0, 0, 0)` together.
 - PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
 - PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
+- For interactive toggle/button scripts, always create a menu: menu.set_menu_name, menu.get_submenu, add_category, add_group, then add the command to the group with group:add_command(id).
 
 Known YimMenuV2 Lua API:
 - natives.load_natives() — call once at the top if using GTA natives.
@@ -682,6 +683,28 @@ Known YimMenuV2 Lua API:
 Filenaming:
 - Put `-- filename: short_snake_case_name.lua` as the very first line of the Lua code.
 - Example: `-- filename: instant_car_brake.lua`
+
+Example structure for a complete interactive toggle script:
+```lua
+-- filename: example_script.lua
+natives.load_natives()
+
+menu.set_menu_name("My Script")
+local submenu = menu.get_submenu("My Script")
+local category = submenu:add_category("Actions")
+local group = category:add_group("Toggles")
+
+local function tick_fn()
+    -- loop logic
+    script.yield(0)
+end
+
+commandmgr.add_looped_command("my_toggle", "My Toggle", "Does something", tick_fn,
+    function() notify.success("My Toggle", "Enabled") end,
+    function() notify.success("My Toggle", "Disabled") end)
+
+group:add_command("my_toggle")
+```
 """)
 
 
