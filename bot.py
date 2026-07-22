@@ -327,7 +327,7 @@ async def handle_create_request(channel, prompt: str, reply_target=None):
 
 intents = discord.Intents.default()
 intents.message_content = True
-intents.members = False
+intents.members = True
 intents.presences = False
 
 
@@ -497,6 +497,85 @@ async def slash_ask(interaction: discord.Interaction, question: str):
             await send_files(interaction.channel, code_blocks)
     except Exception as e:
         await interaction.followup.send(f":x: Error: {e}")
+
+
+def is_admin(user: discord.Member) -> bool:
+    return user.guild_permissions.administrator or user.guild_permissions.manage_guild
+
+
+@bot.tree.command(name="kick", description="Kick a member from the server (Admin only)")
+@app_commands.describe(member="Who to kick", reason="Why")
+async def slash_kick(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    try:
+        await member.kick(reason=reason)
+        await interaction.response.send_message(f":boot: Kicked `{member.display_name}`: {reason}")
+    except Exception as e:
+        await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="vkick", description="Disconnect a member from voice (Admin only)")
+@app_commands.describe(member="Who to kick from VC")
+async def slash_vkick(interaction: discord.Interaction, member: discord.Member):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    if not member.voice or not member.voice.channel:
+        await interaction.response.send_message(f":x: `{member.display_name}` isn't in voice.", ephemeral=True)
+        return
+    try:
+        await member.move_to(None)
+        await interaction.response.send_message(f":mute: Disconnected `{member.display_name}` from voice.")
+    except Exception as e:
+        await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="say", description="Make Null send a message to a channel (Admin only)")
+@app_commands.describe(channel="Where to send", message="What to say")
+async def slash_say(interaction: discord.Interaction, channel: discord.TextChannel, message: str):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    try:
+        await channel.send(message)
+        await interaction.response.send_message(f":white_check_mark: Sent to {channel.mention}", ephemeral=True)
+    except Exception as e:
+        await interaction.response.send_message(f":x: Failed: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="clear", description="Delete recent messages (Admin only)")
+@app_commands.describe(amount="How many to delete (max 100)")
+async def slash_clear(interaction: discord.Interaction, amount: int):
+    if not is_admin(interaction.user):
+        await interaction.response.send_message(":x: Admin only.", ephemeral=True)
+        return
+    amount = min(max(1, amount), 100)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        deleted = await interaction.channel.purge(limit=amount)
+        await interaction.followup.send(f":wastebasket: Deleted {len(deleted)} messages.", ephemeral=True)
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
+
+
+@bot.tree.command(name="read", description="Read and summarize recent messages from a channel")
+@app_commands.describe(channel="Which channel to read")
+async def slash_read(interaction: discord.Interaction, channel: discord.TextChannel):
+    await interaction.response.defer()
+    try:
+        messages = [m async for m in channel.history(limit=20)]
+        if not messages:
+            await interaction.followup.send(":x: No messages in that channel.")
+            return
+        lines = [f"**{m.author.display_name}**: {m.content or '[attachment]'}" for m in reversed(messages)]
+        chat = "\n".join(lines)
+        summary_prompt = f"Here are the last {len(messages)} messages from #{channel.name}. Summarize what's happening in 2-3 sentences:\n\n{chat}"
+        answer = await call_ai(CHAT_SYSTEM, summary_prompt, temperature=0.3, max_tokens=500)
+        await interaction.followup.send(f":book: **#{channel.name}**:\n{answer}")
+    except Exception as e:
+        await interaction.followup.send(f":x: Failed: {e}", ephemeral=True)
 
 
 bot.run(TOKEN)
