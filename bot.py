@@ -69,28 +69,102 @@ else:
     )
 
 
-async def web_search(query: str, max_results: int = 5) -> str:
+def _search_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
     try:
-        results = await asyncio.to_thread(
-            lambda: list(DDGS().text(query, max_results=max_results))
-        )
+        results = list(DDGS().text(query, max_results=max_results))
         if not results:
-            # Try news search as fallback
-            results = await asyncio.to_thread(
-                lambda: list(DDGS().news(query, max_results=max_results))
-            )
-        if not results:
-            return ""
-        lines = []
-        for i, r in enumerate(results, 1):
-            title = r.get("title", "")
-            snippet = r.get("body", "")
-            link = r.get("href", "")
-            lines.append(f"[{i}] {title}\n{snippet}\n{link}")
-        return "\n\n".join(lines)
+            results = list(DDGS().news(query, max_results=max_results))
+        return results
     except Exception as e:
-        print(f"Web search error for '{query}': {e}")
-        return f"Search error: {e}"
+        print(f"DuckDuckGo search error: {e}")
+        return []
+
+
+async def _search_serpapi(query: str, api_key: str, max_results: int = 5) -> list[dict]:
+    try:
+        url = "https://serpapi.com/search.json"
+        params = {"q": query, "api_key": api_key, "engine": "google", "num": max_results}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                data = await resp.json()
+        results = []
+        for r in data.get("organic_results", [])[:max_results]:
+            results.append({
+                "title": r.get("title", ""),
+                "body": r.get("snippet", ""),
+                "href": r.get("link", ""),
+            })
+        return results
+    except Exception as e:
+        print(f"SerpApi error: {e}")
+        return []
+
+
+async def _search_bing(query: str, api_key: str, max_results: int = 5) -> list[dict]:
+    try:
+        url = "https://api.bing.microsoft.com/v7.0/search"
+        headers = {"Ocp-Apim-Subscription-Key": api_key}
+        params = {"q": query, "count": max_results}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                data = await resp.json()
+        results = []
+        for r in data.get("webPages", {}).get("value", [])[:max_results]:
+            results.append({
+                "title": r.get("name", ""),
+                "body": r.get("snippet", ""),
+                "href": r.get("url", ""),
+            })
+        return results
+    except Exception as e:
+        print(f"Bing search error: {e}")
+        return []
+
+
+async def _search_brave(query: str, api_key: str, max_results: int = 5) -> list[dict]:
+    try:
+        url = "https://api.search.brave.com/res/v1/web/search"
+        headers = {"X-Subscription-Token": api_key, "Accept": "application/json"}
+        params = {"q": query, "count": max_results}
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                data = await resp.json()
+        results = []
+        for r in data.get("web", {}).get("results", [])[:max_results]:
+            results.append({
+                "title": r.get("title", ""),
+                "body": r.get("description", ""),
+                "href": r.get("url", ""),
+            })
+        return results
+    except Exception as e:
+        print(f"Brave search error: {e}")
+        return []
+
+
+async def web_search(query: str, max_results: int = 5) -> str:
+    results = await asyncio.to_thread(lambda: _search_duckduckgo(query, max_results))
+    if not results:
+        serp_key = os.getenv("SERPAPI_API_KEY")
+        if serp_key:
+            results = await _search_serpapi(query, serp_key, max_results)
+    if not results:
+        bing_key = os.getenv("BING_API_KEY")
+        if bing_key:
+            results = await _search_bing(query, bing_key, max_results)
+    if not results:
+        brave_key = os.getenv("BRAVE_API_KEY")
+        if brave_key:
+            results = await _search_brave(query, brave_key, max_results)
+    if not results:
+        return ""
+    lines = []
+    for i, r in enumerate(results, 1):
+        title = r.get("title", "")
+        snippet = r.get("body", "")
+        link = r.get("href", "")
+        lines.append(f"[{i}] {title}\n{snippet}\n{link}")
+    return "\n\n".join(lines)
 
 
 SEARCH_TRIGGER_WORDS = {
@@ -725,7 +799,14 @@ async def answer_with_web_search_if_needed(
                     f"Use the above search results to answer if helpful."
                 )
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
-        return "I searched online but couldn't find any relevant results for that. Try rephrasing or asking something more specific."
+        enhanced_prompt = (
+            f"{prompt}\n\n[Web search failed: no current results found. "
+            "Free DuckDuckGo search may be blocked on this host. "
+            "If you know the answer from your training data, answer briefly. "
+            "If the answer requires current/real-time information, clearly say you don't have access right now "
+            "and suggest adding a search API key (SERPAPI_API_KEY, BING_API_KEY, or BRAVE_API_KEY).]"
+        )
+        return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
     return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
 
 
