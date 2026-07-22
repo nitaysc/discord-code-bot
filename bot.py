@@ -623,8 +623,9 @@ YTDL_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "noplaylist": True,
-    "default_search": "scsearch",
+    "default_search": "ytsearch",
     "extract_flat": "in_playlist",
+    "extractor_args": {"youtube": {"skip": ["webpage"], "player_client": ["android"]}},
 }
 
 FFMPEG_OPTS = {
