@@ -181,6 +181,127 @@ async def web_search(query: str, max_results: int = 5) -> str:
     return "\n\n".join(lines)
 
 
+async def _fetch_valorant_json(url: str) -> dict | None:
+    try:
+        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15)) as session:
+            async with session.get(url) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+                print(f"[VALORANT] HTTP {resp.status} for {url}")
+                return None
+    except Exception as e:
+        print(f"[VALORANT] error: {e}")
+        return None
+
+
+async def get_valorant_account(name: str, tag: str) -> dict | None:
+    url = f"https://api.henrikdev.xyz/valorant/v1/account/{name}/{tag}"
+    data = await _fetch_valorant_json(url)
+    if not data:
+        return None
+    return data.get("data")
+
+
+async def get_valorant_mmr(name: str, tag: str, region: str = "eu") -> dict | None:
+    url = f"https://api.henrikdev.xyz/valorant/v1/mmr/{region}/{name}/{tag}"
+    data = await _fetch_valorant_json(url)
+    if not data:
+        return None
+    return data.get("data")
+
+
+async def get_valorant_matches(name: str, tag: str, region: str = "eu", limit: int = 3) -> list[dict]:
+    url = f"https://api.henrikdev.xyz/valorant/v3/matches/{region}/{name}/{tag}"
+    data = await _fetch_valorant_json(url)
+    if not data:
+        return []
+    matches = data.get("data", [])
+    return matches[:limit]
+
+
+VALORANT_REGIONS = ["na", "eu", "ap", "kr", "latam", "br"]
+
+
+def _extract_valorant_profiles_from_search(text: str, query_name: str) -> list[tuple[str, str]]:
+    """Extract (name, tag) pairs from tracker.gg search result snippets/links."""
+    found: list[tuple[str, str]] = []
+    seen = set()
+    # tracker.gg profile URLs look like: .../tracker.gg/valorant/profile/riot/{name}%23{tag}/overview
+    pattern = re.compile(r"/valorant/profile/riot/([^/\s%]+)(?:%23|#)([^/\s%]+)/", re.IGNORECASE)
+    for m in pattern.finditer(text):
+        name_part = m.group(1).replace("%20", " ").replace("+", " ")
+        tag_part = m.group(2)
+        key = (name_part.lower(), tag_part.lower())
+        if key not in seen:
+            seen.add(key)
+            found.append((name_part, tag_part))
+    # Fallback: look for "Name #tag" or "Name#tag" anywhere in text
+    if not found:
+        fallback = re.compile(rf"({re.escape(query_name)}[^#\n]{{0,15}}?)\s*#(\w+)", re.IGNORECASE)
+        for m in fallback.finditer(text):
+            name_part = m.group(1).strip()
+            tag_part = m.group(2)
+            key = (name_part.lower(), tag_part.lower())
+            if key not in seen:
+                seen.add(key)
+                found.append((name_part, tag_part))
+    return found[:10]
+
+
+async def search_valorant_profiles(name: str) -> list[tuple[str, str]]:
+    query = f"site:tracker.gg/valorant/profile/riot {name}"
+    results_text = await web_search(query, max_results=8)
+    return _extract_valorant_profiles_from_search(results_text, name)
+
+
+class ValorantProfileSelect(discord.ui.Select):
+    def __init__(self, profiles: list[tuple[str, str]]):
+        options = []
+        for i, (pname, ptag) in enumerate(profiles[:25]):
+            label = f"{pname}#{ptag}"[:25]
+            options.append(discord.SelectOption(label=label, value=f"{pname}|{ptag}", description=f"Select {pname}#{ptag}"[:50]))
+        super().__init__(placeholder="Choose a player...", options=options)
+        self.profiles = profiles
+
+    async def callback(self, interaction: discord.Interaction):
+        name, tag = self.values[0].split("|", 1)
+        await interaction.response.defer()
+        account = await get_valorant_account(name, tag)
+        if not account:
+            await interaction.followup.send(f":x: Couldn't load account for **{name}#{tag}**.")
+            return
+
+        region = "eu"
+        region_hint = account.get("region", "")
+        if region_hint and region_hint.lower() in VALORANT_REGIONS:
+            region = region_hint.lower()
+        mmr = await get_valorant_mmr(name, tag, region)
+
+        card = account.get("card", {})
+        embed = discord.Embed(
+            title=f"{account.get('name', name)}#{account.get('tag', tag)}",
+            color=0xfa4454,
+        )
+        if card.get("small"):
+            embed.set_thumbnail(url=card["small"])
+        if card.get("wide"):
+            embed.set_image(url=card["wide"])
+        embed.add_field(name="Region", value=account.get("region", region).upper() or "Unknown", inline=True)
+        embed.add_field(name="Account Level", value=str(account.get("account_level", "?")), inline=True)
+        if mmr:
+            rank_name = mmr.get("currenttierpatched") or mmr.get("currenttier", "Unknown")
+            rr = mmr.get("ranking_in_tier", "?")
+            last_game = mmr.get("mmr_change_to_last_game", 0)
+            last_game_text = f"{last_game:+d} RR last game" if isinstance(last_game, int) else ""
+            embed.add_field(name="Rank", value=f"{rank_name} — {rr} RR\n{last_game_text}", inline=False)
+            if mmr.get("images", {}).get("small"):
+                embed.set_thumbnail(url=mmr["images"]["small"])
+        else:
+            embed.add_field(name="Rank", value="Could not load ranked data.", inline=False)
+
+        await interaction.followup.send(embed=embed)
+
+
 SEARCH_TRIGGER_WORDS = {
     "latest", "current", "today", "now", "news", "weather", "price", "prices",
     "score", "scores", "update", "recent", "happened", "happening", "live",
@@ -1090,13 +1211,27 @@ def _parse_duration(duration_str: str) -> timedelta | None:
     return timedelta(seconds=total_seconds)
 
 
+def _is_guild_admin(author: discord.Member) -> bool:
+    return author == author.guild.owner or author.guild_permissions.administrator
+
+
+def _can_moderate_member(author: discord.Member, target: discord.Member) -> tuple[bool, str]:
+    """Check if author can moderate target. Returns (ok, error_message)."""
+    if _is_guild_admin(author):
+        return True, ""
+    if author.top_role <= target.top_role:
+        return False, ":x: You can't moderate someone with a higher or equal role."
+    return True, ""
+
+
 async def _action_kick(message: discord.Message, target: discord.Member, reason: str) -> str:
-    if not message.author.guild_permissions.kick_members:
+    if not message.author.guild_permissions.kick_members and not _is_guild_admin(message.author):
         return ":x: You don't have permission to kick members."
     if not message.guild.me.guild_permissions.kick_members:
         return ":x: I don't have permission to kick members."
-    if message.author.top_role <= target.top_role and not message.author == message.guild.owner:
-        return ":x: You can't kick someone with a higher or equal role."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
     try:
         await target.kick(reason=f"{message.author}: {reason}"[:512])
         return f":white_check_mark: Kicked {target.mention}."
@@ -1105,12 +1240,13 @@ async def _action_kick(message: discord.Message, target: discord.Member, reason:
 
 
 async def _action_ban(message: discord.Message, target: discord.Member, reason: str) -> str:
-    if not message.author.guild_permissions.ban_members:
+    if not message.author.guild_permissions.ban_members and not _is_guild_admin(message.author):
         return ":x: You don't have permission to ban members."
     if not message.guild.me.guild_permissions.ban_members:
         return ":x: I don't have permission to ban members."
-    if message.author.top_role <= target.top_role and not message.author == message.guild.owner:
-        return ":x: You can't ban someone with a higher or equal role."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
     try:
         await target.ban(reason=f"{message.author}: {reason}"[:512])
         return f":white_check_mark: Banned {target.mention}."
@@ -1119,7 +1255,7 @@ async def _action_ban(message: discord.Message, target: discord.Member, reason: 
 
 
 async def _action_timeout(message: discord.Message, target: discord.Member, duration_str: str, reason: str) -> str:
-    if not message.author.guild_permissions.moderate_members:
+    if not message.author.guild_permissions.moderate_members and not _is_guild_admin(message.author):
         return ":x: You don't have permission to timeout members."
     if not message.guild.me.guild_permissions.moderate_members:
         return ":x: I don't have permission to timeout members."
@@ -1128,14 +1264,92 @@ async def _action_timeout(message: discord.Message, target: discord.Member, dura
         return ":x: Invalid duration. Use like `1h`, `30m`, `1d`."
     if duration > timedelta(days=28):
         return ":x: Timeout can't be longer than 28 days."
-    if message.author.top_role <= target.top_role and not message.author == message.guild.owner:
-        return ":x: You can't timeout someone with a higher or equal role."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
     try:
         until = datetime.now(timezone.utc) + duration
         await target.timeout(until, reason=f"{message.author}: {reason}"[:512])
         return f":white_check_mark: Timed out {target.mention} for {duration_str}."
     except Exception as e:
         return f":x: Failed to timeout: {e}"
+
+
+async def _action_mute(message: discord.Message, target: discord.Member, reason: str) -> str:
+    """Text-chat mute is implemented as a 1-hour timeout by default."""
+    if not message.author.guild_permissions.moderate_members and not _is_guild_admin(message.author):
+        return ":x: You don't have permission to mute members."
+    if not message.guild.me.guild_permissions.moderate_members:
+        return ":x: I don't have permission to mute members."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
+    try:
+        until = datetime.now(timezone.utc) + timedelta(hours=1)
+        await target.timeout(until, reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Muted {target.mention} for 1 hour."
+    except Exception as e:
+        return f":x: Failed to mute: {e}"
+
+
+async def _action_voicemute(message: discord.Message, target: discord.Member, reason: str) -> str:
+    if not message.author.guild_permissions.mute_members and not _is_guild_admin(message.author):
+        return ":x: You don't have permission to server-mute members."
+    if not message.guild.me.guild_permissions.mute_members:
+        return ":x: I don't have permission to server-mute members."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
+    try:
+        await target.edit(mute=True, reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Server-muted {target.mention}."
+    except Exception as e:
+        return f":x: Failed to server-mute: {e}"
+
+
+async def _action_voiceunmute(message: discord.Message, target: discord.Member, reason: str) -> str:
+    if not message.author.guild_permissions.mute_members and not _is_guild_admin(message.author):
+        return ":x: You don't have permission to unmute members."
+    if not message.guild.me.guild_permissions.mute_members:
+        return ":x: I don't have permission to unmute members."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
+    try:
+        await target.edit(mute=False, reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Unmuted {target.mention}."
+    except Exception as e:
+        return f":x: Failed to unmute: {e}"
+
+
+async def _action_deafen(message: discord.Message, target: discord.Member, reason: str) -> str:
+    if not message.author.guild_permissions.deafen_members and not _is_guild_admin(message.author):
+        return ":x: You don't have permission to server-deafen members."
+    if not message.guild.me.guild_permissions.deafen_members:
+        return ":x: I don't have permission to server-deafen members."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
+    try:
+        await target.edit(deafen=True, reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Server-deafened {target.mention}."
+    except Exception as e:
+        return f":x: Failed to server-deafen: {e}"
+
+
+async def _action_undeafen(message: discord.Message, target: discord.Member, reason: str) -> str:
+    if not message.author.guild_permissions.deafen_members and not _is_guild_admin(message.author):
+        return ":x: You don't have permission to undeafen members."
+    if not message.guild.me.guild_permissions.deafen_members:
+        return ":x: I don't have permission to undeafen members."
+    ok, err = _can_moderate_member(message.author, target)
+    if not ok:
+        return err
+    try:
+        await target.edit(deafen=False, reason=f"{message.author}: {reason}"[:512])
+        return f":white_check_mark: Undeafened {target.mention}."
+    except Exception as e:
+        return f":x: Failed to undeafen: {e}"
 
 
 async def _action_unban(message: discord.Message, user_id_or_mention: str) -> str:
@@ -1237,11 +1451,11 @@ async def _action_purge(message: discord.Message, amount: str) -> str:
 
 
 async def _action_addrole(message: discord.Message, target: discord.Member, role: discord.Role) -> str:
-    if not message.author.guild_permissions.manage_roles:
+    if not message.author.guild_permissions.manage_roles and not _is_guild_admin(message.author):
         return ":x: You don't have permission to manage roles."
     if not message.guild.me.guild_permissions.manage_roles:
         return ":x: I don't have permission to manage roles."
-    if message.author.top_role <= role and not message.author == message.guild.owner:
+    if not _is_guild_admin(message.author) and message.author.top_role <= role:
         return ":x: You can't assign a role higher than or equal to your top role."
     if message.guild.me.top_role <= role:
         return ":x: My role is too low to assign that role."
@@ -1253,11 +1467,11 @@ async def _action_addrole(message: discord.Message, target: discord.Member, role
 
 
 async def _action_removerole(message: discord.Message, target: discord.Member, role: discord.Role) -> str:
-    if not message.author.guild_permissions.manage_roles:
+    if not message.author.guild_permissions.manage_roles and not _is_guild_admin(message.author):
         return ":x: You don't have permission to manage roles."
     if not message.guild.me.guild_permissions.manage_roles:
         return ":x: I don't have permission to manage roles."
-    if message.author.top_role <= role and not message.author == message.guild.owner:
+    if not _is_guild_admin(message.author) and message.author.top_role <= role:
         return ":x: You can't remove a role higher than or equal to your top role."
     if message.guild.me.top_role <= role:
         return ":x: My role is too low to remove that role."
@@ -1313,10 +1527,8 @@ def _resolve_channel(guild: discord.Guild, text: str) -> discord.abc.GuildChanne
     return None
 
 
-async def execute_admin_actions(message: discord.Message, text: str) -> list[str]:
-    if not message.guild:
-        return []
-    results = []
+def _extract_action_lines(text: str) -> list[tuple[str, list[str]]]:
+    actions = []
     for line in text.split("\n"):
         line = line.strip()
         if not line.startswith("ACTION:"):
@@ -1325,8 +1537,62 @@ async def execute_admin_actions(message: discord.Message, text: str) -> list[str
         parts = action_text.split(None, 2)
         if not parts:
             continue
-        action = parts[0].lower()
-        args = parts[1:]
+        actions.append((parts[0].lower(), parts[1:]))
+    return actions
+
+
+def _guess_admin_actions(content: str) -> list[tuple[str, list[str]]]:
+    """Fallback pattern matcher for direct admin requests when the AI doesn't produce ACTION lines."""
+    guessed = []
+    stop_words = {"in", "and", "or", "from", "to", "the", "a", "an", "on", "at", "for", "with"}
+
+    def _clean_target(raw: str) -> str | None:
+        raw = raw.strip().rstrip(",.!?")
+        if raw.lower() in stop_words:
+            return None
+        return raw
+
+    # Voice mute: mute ... voice / vc
+    if re.search(r"\bmute\b", content, re.IGNORECASE) and re.search(r"\b(voice|vc)\b", content, re.IGNORECASE):
+        for m in re.finditer(r"<@!?\d+>", content):
+            target = _clean_target(m.group(0))
+            if target:
+                guessed.append(("voicemute", [target]))
+        # Also try names after "user"
+        for m in re.finditer(r"\buser\s+(.+?)(?:\s+(?:in|and|or|from|to)\b|$)", content, re.IGNORECASE):
+            target = _clean_target(m.group(1).split()[0])
+            if target:
+                guessed.append(("voicemute", [target]))
+
+    # Deafen: deafen ...
+    if re.search(r"\bdeafen\b", content, re.IGNORECASE):
+        for m in re.finditer(r"<@!?\d+>", content):
+            target = _clean_target(m.group(0))
+            if target:
+                guessed.append(("deafen", [target]))
+        for m in re.finditer(r"\bdeafen\s+(?:the\s+)?(?:user\s+)?(.+?)(?:\s+(?:in|and|or|from|to)\b|$)", content, re.IGNORECASE):
+            target = _clean_target(m.group(1).split()[0])
+            if target:
+                guessed.append(("deafen", [target]))
+
+    # Plain text mute (no voice mentioned)
+    if re.search(r"\bmute\b", content, re.IGNORECASE) and not re.search(r"\b(voice|vc)\b", content, re.IGNORECASE):
+        for m in re.finditer(r"<@!?\d+>", content):
+            target = _clean_target(m.group(0))
+            if target:
+                guessed.append(("mute", [target]))
+
+    return guessed
+
+
+async def execute_admin_actions(message: discord.Message, text: str) -> list[str]:
+    if not message.guild:
+        return []
+    results = []
+    action_lines = _extract_action_lines(text)
+    if not action_lines:
+        action_lines = _guess_admin_actions(message.content)
+    for action, args in action_lines:
         result = await _dispatch_admin_action(message, action, args)
         if result:
             results.append(result)
@@ -1357,6 +1623,41 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
             if not target:
                 return ":x: Member not found."
             return await _action_timeout(message, target, duration, reason)
+
+        if action == "mute" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_mute(message, target, reason)
+
+        if action == "voicemute" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_voicemute(message, target, reason)
+
+        if action == "voiceunmute" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_voiceunmute(message, target, reason)
+
+        if action == "deafen" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_deafen(message, target, reason)
+
+        if action == "undeafen" and len(args) >= 1:
+            target = _resolve_member(guild, args[0])
+            reason = args[1] if len(args) > 1 else "No reason provided"
+            if not target:
+                return ":x: Member not found."
+            return await _action_undeafen(message, target, reason)
 
         if action == "unban" and len(args) >= 1:
             return await _action_unban(message, args[0])
@@ -1528,7 +1829,7 @@ MY CAPABILITIES:
 - Create .exe source with compile instructions
 - Read & summarize channels: /read #channel
 - See who's in voice: /voice or ask "who's in vc?"
-- Kick/ban/timeout/unban users via chat (only if the requester has permission)
+- Kick/ban/timeout/mute/voicemute/deafen users via chat (only if the requester has permission) or use /voicemute, /voiceunmute, /deafen, /undeafen
 - Create/delete channels, lock/unlock channels, set slowmode via chat (only if the requester has permission)
 - Add/remove roles, purge messages via chat (only if the requester has permission)
 - Ticket system: /ticketsetup, /ticketpanel, /ticket, /claim, /close, /addtoticket, /removefromticket
@@ -1536,6 +1837,7 @@ MY CAPABILITIES:
 - See images: attach an image and ask about it
 - Read files: drop a .lua, .txt, .py, .json, or any text file and ask about it
 - Voice features coming soon (speech-to-text and text-to-speech)
+- Valorant tracker: /valorantsearch <name> (no tag needed), /valorant <name> <tag>, /valorantmmr <name> <tag> <region>
 - I remember the last 50 messages in each channel
 
 I am a real Discord bot with real features. Never say "I can't" without checking my actual capabilities above.
@@ -1552,12 +1854,16 @@ Rules:
 - For code/file requests, output the content and the system sends it as a downloadable file.
 - For vague questions like "what is this" or "what does this do" about a file you just sent, explain in text. Do NOT generate new code.
 - Do NOT output code blocks unless the user explicitly asked for code, a script, or a file.
-- For admin actions (kick, ban, timeout, create/delete channel, lock/unlock, slowmode, add/remove role, purge): you MAY execute them by putting an ACTION line at the end of your response. The system checks if the user has permission before running it.
-- Format admin actions like: ACTION: kick @user spam | ACTION: ban @user breaking rules | ACTION: timeout @user 1h spam | ACTION: create channel #logs text | ACTION: delete channel #spam | ACTION: lock #general | ACTION: unlock #general | ACTION: slowmode #general 5 | ACTION: purge 10 | ACTION: addrole @user @Member | ACTION: removerole @user @Member
+- For admin actions (kick, ban, timeout, mute, voicemute, voiceunmute, deafen, undeafen, create/delete channel, lock/unlock, slowmode, add/remove role, purge): you MUST execute them by putting an ACTION line at the end of your response. The system checks if the user has permission before running it.
+- Format admin actions like: ACTION: kick @user spam | ACTION: ban @user breaking rules | ACTION: timeout @user 1h spam | ACTION: mute @user spam | ACTION: voicemute @user spam | ACTION: voiceunmute @user | ACTION: deafen @user spam | ACTION: undeafen @user | ACTION: create channel #logs text | ACTION: delete channel #spam | ACTION: lock #general | ACTION: unlock #general | ACTION: slowmode #general 5 | ACTION: purge 10 | ACTION: addrole @user @Member | ACTION: removerole @user @Member
 - NEVER execute an admin action without an ACTION: line. The user must explicitly ask for the action.
+- If the user asks to mute/deafen someone in a voice channel, you MUST use ACTION: voicemute @user or ACTION: deafen @user. Do NOT say you can't do it.
+- If the user says "mute" without mentioning voice, use ACTION: mute @user (text timeout).
 - For ANY question about current events, recent news, sports results, today's date, future dates, or anything time-sensitive: you MUST rely on the web search results provided in the prompt, NOT your training data. Your training data has a cutoff and may be outdated.
 - If web search results are provided, use them as the authoritative source. Do not contradict them with your built-in knowledge.
 - If no search results are provided and the question is time-sensitive, say you don't have current info rather than guessing.
+- When server voice channel info is provided in the prompt, use it to answer questions about who is in a voice channel. Do NOT say you cannot see or do not know — the data is authoritative.
+- For Valorant stats, tell users to use /valorant or /valorantmmr with name and tag (e.g., /valorant TenZ #1). Do not guess stats.
 - Keep responses short and natural. Don't list all features unless asked.
 - Respond in the same language the user speaks.
 """)
@@ -2046,12 +2352,14 @@ class CodeBot(commands.Bot):
         if self._synced_once:
             return
         self._synced_once = True
+        commands = self.tree.get_commands()
+        print(f"[SYNC] {len(commands)} global slash commands defined")
         for guild in self.guilds:
             try:
                 self.tree.clear_commands(guild=guild)
                 self.tree.copy_global_to(guild=guild)
-                await self.tree.sync(guild=guild)
-                print(f"Synced commands to guild: {guild.name}")
+                synced = await self.tree.sync(guild=guild)
+                print(f"[SYNC] Synced {len(synced)} commands to guild: {guild.name}")
             except Exception as e:
                 print(f"Failed to sync to {guild.name}: {e}")
         try:
@@ -2161,10 +2469,23 @@ async def on_message(message):
                 else:
                     context_extra = ""
                     content_lower = content.lower()
-                    if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk"]):
-                        context_extra = f"\n\n[Server voice info: {get_voice_info(message.guild)}]"
+                    if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"]):
+                        voice_info = get_voice_info(message.guild)
+                        context_extra = f"\n\n[Current server voice channels and members (use this to answer):\n{voice_info}]"
                     if file_extra:
                         context_extra += f"\n\n{file_extra}"
+
+                    # Strong direct instruction for admin/moderation requests
+                    admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole"]
+                    if any(kw in content_lower for kw in admin_keywords):
+                        context_extra += "\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]"
+
+                    if any(w in content_lower for w in ["mute", "deafen"]) and any(w in content_lower for w in ["voice", "vc"]):
+                        context_extra += "\n[Voice action: use ACTION: voicemute @user or ACTION: deafen @user.]"
+                    elif "mute" in content_lower and not any(w in content_lower for w in ["voice", "vc"]):
+                        context_extra += "\n[Text mute: use ACTION: mute @user.]"
+                    if "deafen" in content_lower:
+                        context_extra += "\n[Voice action: use ACTION: deafen @user.]"
 
                     history = get_history(channel_id)
                     prompt = content + context_extra
@@ -2846,9 +3167,11 @@ def get_voice_info(guild: discord.Guild) -> str:
         members = vc.members
         if members:
             names = ", ".join(m.display_name for m in members)
-            vc_data.append(f"**{vc.name}** ({len(members)}): {names}")
+            vc_data.append(f"{vc.name}: {names} ({len(members)})")
+        else:
+            vc_data.append(f"{vc.name}: empty")
     if not vc_data:
-        return "No one is in any voice channel."
+        return "No voice channels exist."
     return "\n".join(vc_data)
 
 
@@ -2859,6 +3182,205 @@ async def slash_voice(interaction: discord.Interaction):
         return
     info = get_voice_info(interaction.guild)
     await interaction.response.send_message(f":loud_sound: **Voice channels:**\n{info}")
+
+
+@bot.tree.command(name="valorantsearch", description="Search Valorant players by name (no tag needed)")
+@app_commands.describe(name="Player name")
+async def slash_valorantsearch(interaction: discord.Interaction, name: str):
+    await interaction.response.defer()
+    profiles = await search_valorant_profiles(name)
+    if not profiles:
+        await interaction.followup.send(
+            f":x: No public tracker profiles found for **{name}**.\n"
+            "Try using the exact name+tag command: `/valorant <name> <tag>`."
+        )
+        return
+
+    view = discord.ui.View(timeout=120)
+    view.add_item(ValorantProfileSelect(profiles))
+    profile_list = "\n".join(f"• {n}#{t}" for n, t in profiles[:10])
+    await interaction.followup.send(
+        f":mag: Found **{len(profiles)}** possible profile(s) for **{name}**. Pick one:",
+        view=view,
+    )
+
+
+@bot.tree.command(name="valorant", description="Look up a Valorant player account and rank")
+@app_commands.describe(name="Player name", tag="Player tag (without #)")
+async def slash_valorant(interaction: discord.Interaction, name: str, tag: str):
+    await interaction.response.defer()
+    tag = tag.lstrip("#")
+
+    account = await get_valorant_account(name, tag)
+    if not account:
+        await interaction.followup.send(f":x: Couldn't find **{name}#{tag}**. Check the name/tag and try again.")
+        return
+
+    region = "eu"
+    region_hint = account.get("region", "")
+    if region_hint and region_hint.lower() in VALORANT_REGIONS:
+        region = region_hint.lower()
+
+    mmr = await get_valorant_mmr(name, tag, region)
+
+    card = account.get("card", {})
+    embed = discord.Embed(
+        title=f"{account.get('name', name)}#{account.get('tag', tag)}",
+        color=0xfa4454,
+    )
+    if card.get("small"):
+        embed.set_thumbnail(url=card["small"])
+    if card.get("wide"):
+        embed.set_image(url=card["wide"])
+
+    embed.add_field(name="Region", value=account.get("region", region).upper() or "Unknown", inline=True)
+    embed.add_field(name="Account Level", value=str(account.get("account_level", "?")), inline=True)
+
+    if mmr:
+        rank_name = mmr.get("currenttierpatched") or mmr.get("currenttier", "Unknown")
+        rr = mmr.get("ranking_in_tier", "?")
+        last_game = mmr.get("mmr_change_to_last_game", 0)
+        last_game_text = f"{last_game:+d} RR last game" if isinstance(last_game, int) else ""
+        embed.add_field(
+            name="Rank",
+            value=f"{rank_name} — {rr} RR\n{last_game_text}",
+            inline=False,
+        )
+        if mmr.get("images", {}).get("small"):
+            embed.set_thumbnail(url=mmr["images"]["small"])
+    else:
+        embed.add_field(name="Rank", value="Could not load ranked data.", inline=False)
+
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="valorantmmr", description="Look up detailed Valorant MMR/rank info")
+@app_commands.describe(name="Player name", tag="Player tag (without #)", region="Region: na, eu, ap, kr, latam, br")
+async def slash_valorantmmr(interaction: discord.Interaction, name: str, tag: str, region: str = "eu"):
+    await interaction.response.defer()
+    tag = tag.lstrip("#")
+    region = region.lower()
+    if region not in VALORANT_REGIONS:
+        await interaction.followup.send(f":x: Region must be one of: {', '.join(VALORANT_REGIONS)}.")
+        return
+
+    mmr = await get_valorant_mmr(name, tag, region)
+    if not mmr:
+        await interaction.followup.send(f":x: Couldn't load MMR for **{name}#{tag}** in {region.upper()}.")
+        return
+
+    embed = discord.Embed(
+        title=f"{mmr.get('name', name)}#{mmr.get('tag', tag)} — {region.upper()} Rank",
+        color=0xfa4454,
+    )
+    rank_name = mmr.get("currenttierpatched") or mmr.get("currenttier", "Unknown")
+    embed.add_field(name="Current Rank", value=rank_name, inline=True)
+    embed.add_field(name="RR in Tier", value=str(mmr.get("ranking_in_tier", "?")), inline=True)
+    embed.add_field(name="ELO", value=str(mmr.get("elo", "?")), inline=True)
+    last_game = mmr.get("mmr_change_to_last_game", 0)
+    if isinstance(last_game, int):
+        embed.add_field(name="Last Game", value=f"{last_game:+d} RR", inline=True)
+    if mmr.get("images", {}).get("small"):
+        embed.set_thumbnail(url=mmr["images"]["small"])
+
+    await interaction.followup.send(embed=embed)
+
+
+@bot.tree.command(name="valorantmatches", description="Show recent Valorant matches")
+@app_commands.describe(name="Player name", tag="Player tag (without #)", region="Region: na, eu, ap, kr, latam, br")
+async def slash_valorantmatches(interaction: discord.Interaction, name: str, tag: str, region: str = "eu"):
+    await interaction.response.defer()
+    tag = tag.lstrip("#")
+    region = region.lower()
+    if region not in VALORANT_REGIONS:
+        await interaction.followup.send(f":x: Region must be one of: {', '.join(VALORANT_REGIONS)}.")
+        return
+
+    matches = await get_valorant_matches(name, tag, region, limit=3)
+    if not matches:
+        await interaction.followup.send(f":x: No recent matches found for **{name}#{tag}** in {region.upper()}.")
+        return
+
+    lines = []
+    for i, match in enumerate(matches, 1):
+        meta = match.get("metadata", {})
+        players = match.get("players", {}).get("all_players", [])
+        player_stats = next(
+            (p for p in players if p.get("name", "").lower() == name.lower() and p.get("tag", "").lower() == tag.lower()),
+            None,
+        )
+        if not player_stats:
+            player_stats = next((p for p in players if p.get("name", "").lower() == name.lower()), {})
+
+        stats = player_stats.get("stats", {}) if player_stats else {}
+        kills = stats.get("kills", "?")
+        deaths = stats.get("deaths", "?")
+        assists = stats.get("assists", "?")
+        score = stats.get("score", "?")
+        teams = match.get("teams", {})
+        player_team = (player_stats.get("team", "") or "").lower()
+        team_won = teams.get(player_team, {}).get("has_won", False)
+        result = "Win" if team_won else "Loss"
+
+        lines.append(
+            f"**{i}.** {meta.get('map', '?')} — {result}\n"
+            f"   {kills}/{deaths}/{assists} KDA · Score {score} · {meta.get('game_length', '?')}"
+        )
+
+    embed = discord.Embed(
+        title=f"Recent matches for {name}#{tag} ({region.upper()})",
+        description="\n".join(lines),
+        color=0xfa4454,
+    )
+    await interaction.followup.send(embed=embed)
+
+
+def _synthetic_message(interaction: discord.Interaction) -> discord.Message:
+    """Build a minimal message-like object for slash commands reusing admin action helpers."""
+    class _FakeMsg:
+        def __init__(self, interaction):
+            self.author = interaction.user
+            self.guild = interaction.guild
+            self.channel = interaction.channel
+            self.content = ""
+    return _FakeMsg(interaction)
+
+
+@bot.tree.command(name="voicemute", description="Server mute a member in voice channels")
+@app_commands.describe(member="Member to server mute", reason="Reason")
+async def slash_voicemute(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+    result = await _action_voicemute(
+        _synthetic_message(interaction), member, reason
+    )
+    await interaction.response.send_message(result)
+
+
+@bot.tree.command(name="voiceunmute", description="Remove server mute from a member")
+@app_commands.describe(member="Member to unmute", reason="Reason")
+async def slash_voiceunmute(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+    result = await _action_voiceunmute(
+        _synthetic_message(interaction), member, reason
+    )
+    await interaction.response.send_message(result)
+
+
+@bot.tree.command(name="deafen", description="Server deafen a member in voice channels")
+@app_commands.describe(member="Member to server deafen", reason="Reason")
+async def slash_deafen(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+    result = await _action_deafen(
+        _synthetic_message(interaction), member, reason
+    )
+    await interaction.response.send_message(result)
+
+
+@bot.tree.command(name="undeafen", description="Remove server deafen from a member")
+@app_commands.describe(member="Member to undeafen", reason="Reason")
+async def slash_undeafen(interaction: discord.Interaction, member: discord.Member, reason: str = "No reason"):
+    result = await _action_undeafen(
+        _synthetic_message(interaction), member, reason
+    )
+    await interaction.response.send_message(result)
+
 
 @bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm)")
 @app_commands.describe(station="Station name or stream URL")
