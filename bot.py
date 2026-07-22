@@ -1,4 +1,5 @@
 import asyncio
+import io
 import os
 import random
 import re
@@ -8,6 +9,7 @@ import textwrap
 from collections import deque
 from datetime import datetime, timezone
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -15,6 +17,7 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import wavelink
 from duckduckgo_search import DDGS
+from PIL import Image, ImageDraw, ImageFont
 
 load_dotenv()
 
@@ -395,6 +398,79 @@ def get_leaderboard(guild_id: int, limit: int = 10) -> list[tuple[int, int, int]
     rows = cur.fetchall()
     conn.close()
     return [(user_id, xp, level_from_xp(xp)) for user_id, xp in rows]
+
+
+async def fetch_avatar(url: str) -> bytes:
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url) as resp:
+            return await resp.read()
+
+
+def _get_font(size: int):
+    for font_name in ["arial.ttf", "DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
+        try:
+            return ImageFont.truetype(font_name, size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
+
+
+async def generate_rank_card(member: discord.Member, data: dict) -> io.BytesIO:
+    width, height = 800, 250
+    bg = Image.new("RGB", (width, height), "#1a1b26")
+    draw = ImageDraw.Draw(bg)
+
+    # Accent bar
+    draw.rectangle([0, 0, 12, height], fill="#7aa2f7")
+
+    # Avatar
+    avatar_data = await fetch_avatar(str(member.display_avatar.url))
+    avatar = Image.open(io.BytesIO(avatar_data)).convert("RGBA")
+    avatar = avatar.resize((140, 140))
+    mask = Image.new("L", (140, 140), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.ellipse([0, 0, 140, 140], fill=255)
+    bg.paste(avatar, (40, 55), mask)
+
+    # Border circle
+    draw.ellipse([38, 53, 182, 197], outline="#7aa2f7", width=4)
+
+    font_big = _get_font(36)
+    font_mid = _get_font(26)
+    font_small = _get_font(20)
+
+    # Name and rank
+    draw.text((210, 40), member.display_name, fill="#c0caf5", font=font_big)
+    draw.text((210, 85), f"Rank #{data['rank']}  •  Level {data['level']}", fill="#a9b1d6", font=font_mid)
+
+    # XP info
+    current_xp = data["xp"]
+    current_level = data["level"]
+    prev_xp = xp_for_level(current_level)
+    next_xp = xp_for_level(current_level + 1)
+    xp_in_level = current_xp - prev_xp
+    xp_needed = next_xp - prev_xp
+    progress = min(1.0, max(0.0, xp_in_level / xp_needed)) if xp_needed > 0 else 1.0
+
+    bar_y = 160
+    bar_width = 540
+    bar_height = 24
+    draw.rounded_rectangle([210, bar_y, 210 + bar_width, bar_y + bar_height], radius=12, fill="#24283b")
+    fill_width = int(bar_width * progress)
+    draw.rounded_rectangle([210, bar_y, 210 + fill_width, bar_y + bar_height], radius=12, fill="#7aa2f7")
+
+    xp_text = f"{current_xp} / {next_xp} XP"
+    draw.text((210, bar_y + 32), xp_text, fill="#a9b1d6", font=font_small)
+    draw.text((210 + bar_width - 120, bar_y + 32), f"{int(progress * 100)}%", fill="#a9b1d6", font=font_small)
+
+    # Stats
+    draw.text((650, 50), f"Msgs: {data['messages']}", fill="#a9b1d6", font=font_small)
+    draw.text((650, 78), f"Voice: {data['voice_minutes']}m", fill="#a9b1d6", font=font_small)
+
+    buf = io.BytesIO()
+    bg.save(buf, format="PNG")
+    buf.seek(0)
+    return buf
 
 
 def get_history(channel_id: int) -> list[dict]:
@@ -881,18 +957,22 @@ async def slash_rank(interaction: discord.Interaction, member: discord.Member = 
         color=discord.Color.blue(),
     )
     embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="Level", value=str(data["level"]), inline=True)
-    embed.add_field(name="XP", value=str(data["xp"]), inline=True)
-    embed.add_field(name="Rank", value=f"#{data['rank']}", inline=True)
+    next_xp = xp_for_level(data["level"] + 1)
+    embed = discord.Embed(
+        title=f":chart_with_upwards_trend: {target.display_name}'s Rank",
+        description=f"Level **{data['level']}**  •  XP **{data['xp']} / {next_xp}**  •  Rank **#{data['rank']}**",
+        color=discord.Color.blue(),
+    )
+    embed.set_thumbnail(url=target.display_avatar.url)
     embed.add_field(name="Messages", value=str(data["messages"]), inline=True)
     embed.add_field(name="Voice (min)", value=str(data["voice_minutes"]), inline=True)
-    next_xp = xp_for_level(data["level"] + 1)
-    embed.add_field(
-        name="Next Level",
-        value=f"{next_xp - data['xp']} XP needed",
-        inline=False,
-    )
-    await interaction.response.send_message(embed=embed)
+    embed.add_field(name="Next Level", value=f"{next_xp - data['xp']} XP needed", inline=True)
+    try:
+        card = await generate_rank_card(target, data)
+        await interaction.response.send_message(embed=embed, file=discord.File(card, filename="rank.png"))
+    except Exception as e:
+        print(f"Rank card error: {e}")
+        await interaction.response.send_message(embed=embed)
 
 
 @bot.tree.command(name="leaderboard", description="Top 10 most active members")
