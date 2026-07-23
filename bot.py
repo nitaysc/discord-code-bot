@@ -58,7 +58,8 @@ def _register_provider(name, base_url, api_key, text_model, vision_model, daily_
 
 
 if GITHUB_TOKEN:
-    _register_provider("GitHub", "https://models.inference.ai.azure.com", GITHUB_TOKEN, "gpt-4o-mini", "gpt-4o-mini", 150)
+    _register_provider("GitHub (gpt-4o-mini)", "https://models.inference.ai.azure.com", GITHUB_TOKEN, "gpt-4o-mini", "gpt-4o-mini", 150)
+    _register_provider("GitHub (gpt-4o)", "https://models.inference.ai.azure.com", GITHUB_TOKEN, "gpt-4o", "gpt-4o", 50)
 if FREETHEAI_KEY:
     _register_provider("FreeTheAi", "https://api.freetheai.xyz/v1", FREETHEAI_KEY, "opc/deepseek-v4-flash-free", "kai/openrouter/free", 250)
 if OPENROUTER_KEY:
