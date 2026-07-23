@@ -3236,7 +3236,19 @@ class CodeBot(commands.Bot):
             await self.tree.sync()
             print("[SYNC] Global commands synced")
         except Exception as e:
-            print(f"[SYNC] Error: {e}")
+            print(f"[SYNC] Global error: {e}")
+        syncs = []
+        for guild in self.guilds:
+            self.tree.copy_global_to(guild=guild)
+            syncs.append(self.tree.sync(guild=guild))
+        if syncs:
+            results = await asyncio.gather(*syncs, return_exceptions=True)
+            for guild, result in zip(self.guilds, results):
+                if isinstance(result, Exception):
+                    print(f"[SYNC] Guild sync error {guild.name}: {result}")
+                else:
+                    print(f"[SYNC] Synced {len(result)} commands to: {guild.name}")
+        print("[SYNC] Done")
 
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         print(f"Lavalink node ready: {payload.node.uri}")
