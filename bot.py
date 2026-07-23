@@ -3214,6 +3214,7 @@ class CodeBot(commands.Bot):
         self.add_view(TicketPanelView(0))
         self.add_view(TicketControlView())
         self.voice_xp_task.start()
+        _ballsdex._init_db(get_db)
         _ballsdex._ensure_countryballs()
         asyncio.create_task(_ballsdex.ballsdex_spawn_loop(self))
         self.tree.add_command(_ballsdex.ballsdex_group)

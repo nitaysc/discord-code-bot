@@ -225,9 +225,14 @@ def _xp_for_level(level: int) -> int:
 
 # ─── DB ─────────────────────────────────────────────────────────────
 
+_get_db_func = None
+
+def _init_db(get_db_func):
+    global _get_db_func
+    _get_db_func = get_db_func
+
 def _db():
-    import bot
-    return bot.get_db()
+    return _get_db_func()
 
 # ─── Paginator ──────────────────────────────────────────────────────
 
