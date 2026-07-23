@@ -11,7 +11,6 @@ import time
 import traceback
 from collections import deque
 from datetime import datetime, timedelta, timezone
-import ballsdex as _ballsdex
 from urllib.parse import quote, urlparse
 
 SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -3214,11 +3213,6 @@ class CodeBot(commands.Bot):
         self.add_view(TicketPanelView(0))
         self.add_view(TicketControlView())
         self.voice_xp_task.start()
-        _ballsdex._init_db(get_db)
-        await _ballsdex._ensure_countryballs()
-        asyncio.create_task(_ballsdex.ballsdex_spawn_loop(self))
-        self.tree.add_command(_ballsdex.ballsdex_group)
-        self.tree.add_command(_ballsdex.admin_group)
 
     async def on_ready(self):
         activity = discord.Activity(
