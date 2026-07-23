@@ -388,6 +388,7 @@ SEARCH_TRIGGER_WORDS = {
     "stock", "crypto", "bitcoin", "election", "winner", "winners", "results",
     "release date", "age of", "net worth",
     "search for", "look up", "look online", "find online", "check online", "google",
+    "lookonline", "lookup", "searchonline",
     "how to",
     "world cup", "olympics", "super bowl", "champions league", "eurovision",
     "2025", "2026", "2027", "yesterday", "tomorrow", "this week", "last week",
