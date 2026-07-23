@@ -1927,7 +1927,7 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                 return ":x: Member or role not found."
             return await _action_removerole(message, target, role)
 
-        return f":x: Unknown admin action: {action}"
+        return ""
     except Exception as e:
         return f":x: Admin action error: {e}"
 
