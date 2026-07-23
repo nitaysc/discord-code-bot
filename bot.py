@@ -11,6 +11,7 @@ import time
 import traceback
 from collections import deque
 from datetime import datetime, timedelta, timezone
+import ballsdex as _ballsdex
 from urllib.parse import quote, urlparse
 
 SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
@@ -901,8 +902,72 @@ CREATE TABLE IF NOT EXISTS welcome_dm_settings (
     enabled INTEGER DEFAULT 0,
     message TEXT DEFAULT 'Welcome to **{server}**! Check out the rules in #rules!'
 );
+CREATE TABLE IF NOT EXISTS ballsdex_countryballs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    country_code TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    rarity TEXT DEFAULT 'Common',
+    attack_base INTEGER DEFAULT 50,
+    defense_base INTEGER DEFAULT 50,
+    hp_base INTEGER DEFAULT 50,
+    speed_base INTEGER DEFAULT 50
+);
+CREATE TABLE IF NOT EXISTS ballsdex_instances (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id BIGINT NOT NULL,
+    guild_id BIGINT NOT NULL,
+    countryball_id INTEGER NOT NULL,
+    attack_iv INTEGER DEFAULT 0,
+    defense_iv INTEGER DEFAULT 0,
+    hp_iv INTEGER DEFAULT 0,
+    speed_iv INTEGER DEFAULT 0,
+    shiny INTEGER DEFAULT 0,
+    level INTEGER DEFAULT 1,
+    xp BIGINT DEFAULT 0,
+    favorite INTEGER DEFAULT 0,
+    caught_at REAL DEFAULT 0,
+    FOREIGN KEY (countryball_id) REFERENCES ballsdex_countryballs(id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user1_id BIGINT NOT NULL,
+    user2_id BIGINT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ballsdex_trade_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL,
+    user_id BIGINT NOT NULL,
+    instance_id INTEGER NOT NULL,
+    FOREIGN KEY (trade_id) REFERENCES ballsdex_trades(id),
+    FOREIGN KEY (instance_id) REFERENCES ballsdex_instances(id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_economy (
+    user_id BIGINT NOT NULL,
+    guild_id BIGINT NOT NULL,
+    coins BIGINT DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_spawn_settings (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    spawn_enabled INTEGER DEFAULT 1,
+    spawn_interval INTEGER DEFAULT 30,
+    PRIMARY KEY (guild_id, channel_id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_spawned (
+    message_id BIGINT PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    countryball_id INTEGER NOT NULL,
+    shiny INTEGER DEFAULT 0,
+    caught INTEGER DEFAULT 0,
+    spawned_at REAL DEFAULT 0,
+    FOREIGN KEY (countryball_id) REFERENCES ballsdex_countryballs(id)
+);
 """
-
 SCHEMA_SCRIPT_POSTGRES = """
 CREATE TABLE IF NOT EXISTS levels (
     guild_id BIGINT NOT NULL,
@@ -1031,6 +1096,67 @@ CREATE TABLE IF NOT EXISTS welcome_dm_settings (
     guild_id BIGINT PRIMARY KEY,
     enabled INTEGER DEFAULT 0,
     message TEXT DEFAULT 'Welcome to **{server}**! Check out the rules in #rules!'
+);
+CREATE TABLE IF NOT EXISTS ballsdex_countryballs (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    country_code TEXT NOT NULL,
+    emoji TEXT NOT NULL,
+    rarity TEXT DEFAULT 'Common',
+    attack_base INTEGER DEFAULT 50,
+    defense_base INTEGER DEFAULT 50,
+    hp_base INTEGER DEFAULT 50,
+    speed_base INTEGER DEFAULT 50
+);
+CREATE TABLE IF NOT EXISTS ballsdex_instances (
+    id SERIAL PRIMARY KEY,
+    user_id BIGINT NOT NULL,
+    guild_id BIGINT NOT NULL,
+    countryball_id INTEGER NOT NULL REFERENCES ballsdex_countryballs(id),
+    attack_iv INTEGER DEFAULT 0,
+    defense_iv INTEGER DEFAULT 0,
+    hp_iv INTEGER DEFAULT 0,
+    speed_iv INTEGER DEFAULT 0,
+    shiny INTEGER DEFAULT 0,
+    level INTEGER DEFAULT 1,
+    xp BIGINT DEFAULT 0,
+    favorite INTEGER DEFAULT 0,
+    caught_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ballsdex_trades (
+    id SERIAL PRIMARY KEY,
+    user1_id BIGINT NOT NULL,
+    user2_id BIGINT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at REAL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS ballsdex_trade_items (
+    id SERIAL PRIMARY KEY,
+    trade_id INTEGER NOT NULL REFERENCES ballsdex_trades(id),
+    user_id BIGINT NOT NULL,
+    instance_id INTEGER NOT NULL REFERENCES ballsdex_instances(id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_economy (
+    user_id BIGINT NOT NULL,
+    guild_id BIGINT NOT NULL,
+    coins BIGINT DEFAULT 0,
+    PRIMARY KEY (user_id, guild_id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_spawn_settings (
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    spawn_enabled INTEGER DEFAULT 1,
+    spawn_interval INTEGER DEFAULT 30,
+    PRIMARY KEY (guild_id, channel_id)
+);
+CREATE TABLE IF NOT EXISTS ballsdex_spawned (
+    message_id BIGINT PRIMARY KEY,
+    guild_id BIGINT NOT NULL,
+    channel_id BIGINT NOT NULL,
+    countryball_id INTEGER NOT NULL REFERENCES ballsdex_countryballs(id),
+    shiny INTEGER DEFAULT 0,
+    caught INTEGER DEFAULT 0,
+    spawned_at REAL DEFAULT 0
 );
 """
 
@@ -3088,6 +3214,10 @@ class CodeBot(commands.Bot):
         self.add_view(TicketPanelView(0))
         self.add_view(TicketControlView())
         self.voice_xp_task.start()
+        _ballsdex._ensure_countryballs()
+        asyncio.create_task(_ballsdex.ballsdex_spawn_loop(self))
+        self.tree.add_command(_ballsdex.ballsdex_group)
+        self.tree.add_command(_ballsdex.admin_group)
 
     async def on_ready(self):
         activity = discord.Activity(
