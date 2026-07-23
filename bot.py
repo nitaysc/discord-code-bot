@@ -2649,6 +2649,24 @@ bot = CodeBot()
 _channel_locks: dict[int, asyncio.Lock] = {}
 
 
+def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
+    if len(text) <= max_len:
+        return [text]
+    chunks = []
+    while text:
+        if len(text) <= max_len:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, max_len)
+        if split_at < 1:
+            split_at = text.rfind(" ", 0, max_len)
+        if split_at < 1:
+            split_at = max_len
+        chunks.append(text[:split_at])
+        text = text[split_at:].strip()
+    return chunks
+
+
 def _get_channel_lock(channel_id: int) -> asyncio.Lock:
     if channel_id not in _channel_locks:
         _channel_locks[channel_id] = asyncio.Lock()
@@ -2744,12 +2762,15 @@ async def on_message(message):
                             line for line in answer.split("\n") if not line.strip().startswith("ACTION:")
                         ).strip()
                         if visible_answer:
-                            await message.reply(visible_answer, mention_author=False)
+                            for chunk in _chunk_text(visible_answer):
+                                await message.reply(chunk, mention_author=False)
                         action_results = await execute_admin_actions(message, answer)
                         for result in action_results:
-                            await message.channel.send(result)
+                            for chunk in _chunk_text(result):
+                                await message.channel.send(chunk)
                 except Exception as e:
-                    await message.reply(f":x: Error: {e}", mention_author=False)
+                    for chunk in _chunk_text(f":x: Error: {e}"):
+                        await message.reply(chunk, mention_author=False)
             return
 
     if message.guild:
