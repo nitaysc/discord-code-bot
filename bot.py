@@ -2608,8 +2608,8 @@ def _rate_limit():
     global _last_ai_call
     with _ai_rate_lock:
         elapsed = time.time() - _last_ai_call
-        if elapsed < 7:
-            time.sleep(7 - elapsed)
+        if elapsed < 1.5:
+            time.sleep(1.5 - elapsed)
         _last_ai_call = time.time()
 
 
