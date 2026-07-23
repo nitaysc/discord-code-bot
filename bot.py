@@ -2205,10 +2205,32 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                 guild = message.guild
                 existing = guild.voice_client
                 if existing:
-                    existing.stop()
-                    await existing.disconnect()
+                    try: existing.stop()
+                    except: pass
+                    try: await existing.disconnect()
+                    except: pass
                 voice = message.author.voice.channel
-                vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
+                try:
+                    vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
+                except Exception as e1:
+                    err_str = str(e1).lower()
+                    if "wavelink" in err_str or "node" in err_str or "pool" in err_str:
+                        import wavelink as _wl
+                        _fallback_nodes = [
+                            _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
+                            _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
+                            _wl.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
+                            _wl.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
+                        ]
+                        for _n in _fallback_nodes:
+                            try:
+                                await _wl.Pool.connect(nodes=[_n], client=bot)
+                                break
+                            except:
+                                continue
+                        vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
+                    else:
+                        return f":x: Could not join voice: {e1}"
                 _voice_text_channels[guild.id] = message.channel.id
                 _voice_tts_lang.setdefault(guild.id, "he")
                 loop = asyncio.get_running_loop()
@@ -4503,8 +4525,27 @@ async def slash_vjoin(interaction: discord.Interaction):
     try:
         vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
     except Exception as e:
-        await interaction.followup.send(f":x: Could not connect: {e}")
-        return
+        err_str = str(e).lower()
+        if "wavelink" in err_str or "node" in err_str or "pool" in err_str:
+            print("[VJOIN] wavelink node down, reconnecting...")
+            import wavelink as _wl
+            _fallback_nodes = [
+                _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
+                _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
+                _wl.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
+                _wl.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
+            ]
+            for _n in _fallback_nodes:
+                try:
+                    await _wl.Pool.connect(nodes=[_n], client=bot)
+                    print(f"[VJOIN] reconnected wavelink: {_n.uri}")
+                    break
+                except:
+                    continue
+            vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
+        else:
+            await interaction.followup.send(f":x: Could not connect: {e}")
+            return
     _voice_text_channels[guild.id] = interaction.channel_id
     # Set up speech recognition
     loop = asyncio.get_running_loop()
