@@ -1636,6 +1636,28 @@ async def _action_create_channel(message: discord.Message, name: str, channel_ty
         return f":x: Failed to create channel: {e}"
 
 
+async def _action_move_channel(message: discord.Message, channel: discord.abc.GuildChannel, target: discord.abc.GuildChannel, direction: str) -> str:
+    if not message.author.guild_permissions.manage_channels:
+        return ":x: You don't have permission to manage channels."
+    if not message.guild.me.guild_permissions.manage_channels:
+        return ":x: I don't have permission to manage channels."
+    try:
+        if direction == "before":
+            await channel.move(before=target)
+            return f":white_check_mark: Moved {channel.mention} above {target.mention}."
+        elif direction == "after":
+            await channel.move(after=target)
+            return f":white_check_mark: Moved {channel.mention} below {target.mention}."
+        elif direction == "to":
+            await channel.move(beginning=True)
+            return f":white_check_mark: Moved {channel.mention} to top."
+        else:
+            await channel.move(before=target)
+            return f":white_check_mark: Moved {channel.mention} before {target.mention}."
+    except Exception as e:
+        return f":x: Failed to move channel: {e}"
+
+
 async def _action_delete_channel(message: discord.Message, channel: discord.TextChannel | discord.VoiceChannel | discord.CategoryChannel) -> str:
     if not message.author.guild_permissions.manage_channels:
         return ":x: You don't have permission to manage channels."
@@ -1930,6 +1952,16 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
             else:
                 channel_type = "text"
             return await _action_create_channel(message, name, channel_type)
+
+        if action == "move" and len(args) >= 3:
+            channel = _resolve_channel(guild, args[0])
+            direction = args[1].lower()
+            target = _resolve_channel(guild, args[2])
+            if not channel:
+                return ":x: Channel not found."
+            if not target and direction in ("above", "below"):
+                return ":x: Target channel not found."
+            return await _action_move_channel(message, channel, target or channel, direction)
 
         if action == "delete" and len(args) >= 2 and args[0].lower() == "channel":
             channel = _resolve_channel(guild, args[1])
@@ -2932,12 +2964,15 @@ async def on_message(message):
                         if file_extra:
                             context_extra += f"\n\n{file_extra}"
 
-                        admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole", "create"]
+                        admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole", "create", "move"]
                         if any(kw in content_lower for kw in admin_keywords):
-                            hint = ""
+                            hints = []
                             if any(w in content_lower for w in ["create", "make", "new", "add"]):
-                                hint = "\n[To create: ACTION: create channel name (defaults to text)  |  To force type: write 'voice' or 'category' in the name, e.g. 'support-voice' or add type: ACTION: create channel name voice]"
-                            context_extra += f"\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]{hint}"
+                                hints.append("ACTION: create channel name (voice/category if name contains 'voice'/'vc')")
+                            if any(w in content_lower for w in ["move", "above", "below", "reorder"]):
+                                hints.append("ACTION: move #channel above #target  |  ACTION: move #channel below #target")
+                            hint_str = "\n".join(f"[{h}]" for h in hints)
+                            context_extra += f"\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.\n{hint_str}]"
 
                         if any(w in content_lower for w in ["mute", "deafen"]) and any(w in content_lower for w in ["voice", "vc"]):
                             context_extra += "\n[Voice action: use ACTION: voicemute @user or ACTION: deafen @user.]"
