@@ -909,6 +909,13 @@ CREATE TABLE IF NOT EXISTS temp_voice_prefs (
     saved_privacy TEXT,
     PRIMARY KEY (guild_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS user_notes (
+    user_id BIGINT NOT NULL,
+    note_key TEXT NOT NULL,
+    note_value TEXT NOT NULL,
+    updated_at REAL DEFAULT 0,
+    PRIMARY KEY (user_id, note_key)
+);
 """
 
 PG_MIGRATION_SCRIPT = """
@@ -3054,7 +3061,8 @@ async def on_message(message):
                         # Image generation
                         img_keywords = ["generate", "create", "draw", "make", "imagine"]
                         img_nouns = ["image", "picture", "photo", "art", "drawing", "painting", "render", "illustration", "icon", "banner", "logo", "meme"]
-                        if any(kw in content_lower for kw in img_keywords) and any(noun in content_lower for noun in img_nouns):
+                        stripped = re.sub(r'[^\w\s]', '', content_lower)
+                        if any(kw in content_lower for kw in img_keywords) and any(noun in stripped for noun in img_nouns):
                             await message.channel.typing()
                             prompt = content
                             for kw in img_keywords + img_nouns:
