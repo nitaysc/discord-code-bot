@@ -29,8 +29,8 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
-AI_KEY = GITHUB_TOKEN or OPENROUTER_KEY or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("AI_MODEL", os.getenv("GEMINI_MODEL", "gpt-4o-mini"))
+AI_KEY = OPENROUTER_KEY or GITHUB_TOKEN or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
+MODEL = os.getenv("AI_MODEL", os.getenv("GEMINI_MODEL", "openrouter/free"))
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
@@ -40,15 +40,15 @@ if not TOKEN or not AI_KEY:
 print(f"[STARTUP] AI provider: {MODEL}")
 print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
 
-if GITHUB_TOKEN:
-    client = OpenAI(
-        base_url="https://models.inference.ai.azure.com",
-        api_key=GITHUB_TOKEN,
-    )
-elif OPENROUTER_KEY:
+if OPENROUTER_KEY:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
+    )
+elif GITHUB_TOKEN:
+    client = OpenAI(
+        base_url="https://models.inference.ai.azure.com",
+        api_key=GITHUB_TOKEN,
     )
 elif HF_TOKEN:
     client = OpenAI(
