@@ -2231,6 +2231,9 @@ def is_create_request(text: str) -> bool:
         ".cs", ".java", ".go", ".rs", ".rb", ".php", ".swift", ".kt",
         ".json", ".xml", ".yml", ".yaml", ".md", ".txt", ".bat",
         ".ps1", ".vbs", ".ahk", ".sh", ".sql", ".ini", ".cfg",
+        "lua", "python", "javascript", "typescript", "html", "css",
+        "java", "golang", "rust", "ruby", "php", "swift", "kotlin",
+        "c#", "c++", "csharp", "cpp",
     ]
     return any(ind in text_lower for ind in file_indicators)
 
