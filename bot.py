@@ -869,6 +869,29 @@ CREATE TABLE IF NOT EXISTS user_notes (
     updated_at REAL DEFAULT 0,
     PRIMARY KEY (user_id, note_key)
 );
+CREATE TABLE IF NOT EXISTS welcome_settings (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT,
+    message TEXT DEFAULT 'Welcome {user} to **{server}**! You are member **#{count}**!',
+    image_url TEXT,
+    enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS goodbye_settings (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT,
+    message TEXT DEFAULT 'Goodbye {user.name}, we will miss you!',
+    enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS autoroles (
+    guild_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    PRIMARY KEY (guild_id, role_id)
+);
+CREATE TABLE IF NOT EXISTS welcome_dm_settings (
+    guild_id BIGINT PRIMARY KEY,
+    enabled INTEGER DEFAULT 0,
+    message TEXT DEFAULT 'Welcome to **{server}**! Check out the rules in #rules!'
+);
 """
 
 SCHEMA_SCRIPT_POSTGRES = """
@@ -976,6 +999,29 @@ CREATE TABLE IF NOT EXISTS user_notes (
     note_value TEXT NOT NULL,
     updated_at REAL DEFAULT 0,
     PRIMARY KEY (user_id, note_key)
+);
+CREATE TABLE IF NOT EXISTS welcome_settings (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT,
+    message TEXT DEFAULT 'Welcome {user} to **{server}**! You are member **#{count}**!',
+    image_url TEXT,
+    enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS goodbye_settings (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT,
+    message TEXT DEFAULT 'Goodbye {user.name}, we will miss you!',
+    enabled INTEGER DEFAULT 1
+);
+CREATE TABLE IF NOT EXISTS autoroles (
+    guild_id BIGINT NOT NULL,
+    role_id BIGINT NOT NULL,
+    PRIMARY KEY (guild_id, role_id)
+);
+CREATE TABLE IF NOT EXISTS welcome_dm_settings (
+    guild_id BIGINT PRIMARY KEY,
+    enabled INTEGER DEFAULT 0,
+    message TEXT DEFAULT 'Welcome to **{server}**! Check out the rules in #rules!'
 );
 """
 
@@ -6002,5 +6048,322 @@ async def mc_pos(interaction: discord.Interaction):
         await interaction.response.send_message(":x: Not connected")
 
 bot.tree.add_command(_mc_mc_group)
+
+# =============================================================================
+# Welcome / Goodbye / Autorole System (like Welcomer.gg)
+# =============================================================================
+
+import io as _io
+from PIL import Image, ImageDraw, ImageFont, ImageFilter as _ImageFilter
+import textwrap as _textwrap
+
+def _get_welcome_settings(guild_id: int) -> dict | None:
+    row = db_execute("SELECT channel_id, message, image_url, enabled FROM welcome_settings WHERE guild_id = ?", (guild_id,))
+    if not row:
+        return None
+    return {"channel_id": row[0], "message": row[1], "image_url": row[2], "enabled": row[3]}
+
+def _get_goodbye_settings(guild_id: int) -> dict | None:
+    row = db_execute("SELECT channel_id, message, enabled FROM goodbye_settings WHERE guild_id = ?", (guild_id,))
+    if not row:
+        return None
+    return {"channel_id": row[0], "message": row[1], "enabled": row[2]}
+
+def _get_autoroles(guild_id: int) -> list[int]:
+    rows = db_execute("SELECT role_id FROM autoroles WHERE guild_id = ?", (guild_id,), fetch_all=True)
+    return [r[0] for r in rows] if rows else []
+
+def _get_welcome_dm(guild_id: int) -> dict:
+    row = db_execute("SELECT enabled, message FROM welcome_dm_settings WHERE guild_id = ?", (guild_id,))
+    if not row:
+        return {"enabled": 0, "message": "Welcome to **{server}**! Check out the rules in #rules!"}
+    return {"enabled": row[0], "message": row[1]}
+
+def _format_welcome_text(template: str, member: discord.Member, guild: discord.Guild) -> str:
+    count = guild.member_count or 0
+    text = template.replace("{user}", member.mention)
+    text = text.replace("{user.name}", member.name)
+    text = text.replace("{user.tag}", str(member))
+    text = text.replace("{server}", guild.name)
+    text = text.replace("{count}", str(count))
+    suff = "th" if 11 <= count % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(count % 10, "th")
+    text = text.replace("{count.ordinal}", f"{count}{suff}")
+    return text
+
+async def _generate_welcome_image(member: discord.Member, guild: discord.Guild, bg_url: str | None = None) -> _io.BytesIO | None:
+    try:
+        import aiohttp
+        width, height = 800, 400
+        img = Image.new("RGBA", (width, height), (30, 30, 40, 255))
+        draw = ImageDraw.Draw(img)
+
+        if bg_url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(bg_url, timeout=10) as resp:
+                        if resp.status == 200:
+                            bg_data = await resp.read()
+                            bg = Image.open(_io.BytesIO(bg_data)).convert("RGBA")
+                            bg = bg.resize((width, height), Image.LANCZOS)
+                            img = Image.blend(bg, img, 0.4)
+                            draw = ImageDraw.Draw(img)
+            except Exception as e:
+                print(f"[WELCOME IMG] bg fetch failed: {e}")
+
+        # Gradient overlay
+        for y in range(height):
+            alpha = int(80 * (1 - y / height))
+            draw.rectangle([(0, y), (width, y)], fill=(0, 0, 0, alpha))
+
+        font_large = None
+        font_small = None
+        font_med = None
+        for size, attr in ((60, "font_large"), (28, "font_med"), (22, "font_small")):
+            try:
+                f = ImageFont.truetype("arial.ttf", size)
+            except Exception:
+                try:
+                    f = ImageFont.truetype("DejaVuSans.ttf", size)
+                except Exception:
+                    f = ImageFont.load_default()
+            if attr == "font_large":
+                font_large = f
+            elif attr == "font_med":
+                font_med = f
+            else:
+                font_small = f
+
+        # Avatar
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(str(member.display_avatar.url), timeout=10) as resp:
+                    if resp.status == 200:
+                        av_data = await resp.read()
+                        av = Image.open(_io.BytesIO(av_data)).convert("RGBA")
+                        av = av.resize((160, 160), Image.LANCZOS)
+                        mask = Image.new("L", (160, 160), 0)
+                        mask_draw = ImageDraw.Draw(mask)
+                        mask_draw.ellipse((0, 0, 160, 160), fill=255)
+                        img.paste(av, (width // 2 - 80, 40), mask)
+        except Exception as e:
+            print(f"[WELCOME IMG] avatar failed: {e}")
+
+        # Welcome text
+        welcome_text = "WELCOME"
+        if font_large:
+            bbox = draw.textbbox((0, 0), welcome_text, font=font_large)
+            tw = bbox[2] - bbox[0]
+            draw.text(((width - tw) / 2, 215), welcome_text, fill=(255, 255, 255, 255), font=font_large)
+
+        # Username
+        name_text = member.name
+        if font_med:
+            bbox = draw.textbbox((0, 0), name_text, font=font_med)
+            tw = bbox[2] - bbox[0]
+            draw.text(((width - tw) / 2, 275), name_text, fill=(180, 220, 255, 255), font=font_med)
+
+        # Server name and member count
+        sub_text = f"{guild.name}  |  Member #{guild.member_count}"
+        if font_small:
+            bbox = draw.textbbox((0, 0), sub_text, font=font_small)
+            tw = bbox[2] - bbox[0]
+            draw.text(((width - tw) / 2, 320), sub_text, fill=(200, 200, 210, 255), font=font_small)
+
+        buf = _io.BytesIO()
+        img.save(buf, "PNG")
+        buf.seek(0)
+        return buf
+    except Exception as e:
+        print(f"[WELCOME IMG] error: {e}")
+        return None
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    guild = member.guild
+    settings = _get_welcome_settings(guild.id)
+    if not settings or not settings["enabled"]:
+        return
+    channel = guild.get_channel(settings["channel_id"]) if settings["channel_id"] else None
+    if not channel:
+        return
+
+    text = _format_welcome_text(settings["message"], member, guild)
+    image_url = settings.get("image_url") or None
+    img_buf = await _generate_welcome_image(member, guild, image_url)
+
+    try:
+        if img_buf:
+            await channel.send(text, file=discord.File(img_buf, "welcome.png"))
+        else:
+            await channel.send(text)
+    except Exception as e:
+        print(f"[WELCOME] send error: {e}")
+
+    # Autorole
+    for role_id in _get_autoroles(guild.id):
+        role = guild.get_role(role_id)
+        if role:
+            try:
+                await member.add_roles(role, reason="Autorole")
+            except Exception as e:
+                print(f"[AUTOROLE] failed for {member.name}: {e}")
+
+    # Welcome DM
+    dm = _get_welcome_dm(guild.id)
+    if dm["enabled"]:
+        try:
+            dm_text = _format_welcome_text(dm["message"], member, guild)
+            await member.send(dm_text)
+        except Exception as e:
+            print(f"[WELCOME DM] failed for {member.name}: {e}")
+
+
+@bot.event
+async def on_member_remove(member: discord.Member):
+    guild = member.guild
+    settings = _get_goodbye_settings(guild.id)
+    if not settings or not settings["enabled"]:
+        return
+    channel = guild.get_channel(settings["channel_id"]) if settings["channel_id"] else None
+    if not channel:
+        return
+
+    text = _format_welcome_text(settings["message"], member, guild)
+    try:
+        await channel.send(text)
+    except Exception as e:
+        print(f"[GOODBYE] send error: {e}")
+
+
+_welcome_group = app_commands.Group(name="welcome", description="Set up welcome messages with images", guild_only=True)
+
+
+@_welcome_group.command(name="channel", description="Set the welcome message channel")
+@app_commands.describe(channel="The channel to post welcome messages in")
+async def welcome_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, 'Welcome {user} to **{server}**! You are member **#{count}**!', 1) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild_id, channel.id, channel.id))
+    await interaction.response.send_message(f":white_check_mark: Welcome messages will be sent to {channel.mention}")
+
+
+@_welcome_group.command(name="message", description="Set the welcome message text")
+@app_commands.describe(text='Message text. Use {user}, {user.name}, {server}, {count}, {count.ordinal}')
+async def welcome_message(interaction: discord.Interaction, text: str):
+    db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, ?, 1) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    await interaction.response.send_message(f":white_check_mark: Welcome message set!\n```{text}```")
+
+
+@_welcome_group.command(name="image", description="Set a background image URL for the welcome card")
+@app_commands.describe(url="Direct image URL for the background. Leave empty to reset to default.")
+async def welcome_image(interaction: discord.Interaction, url: str = None):
+    if url:
+        db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, image_url, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', ?, 1) ON CONFLICT(guild_id) DO UPDATE SET image_url = ?", (interaction.guild_id, url, url))
+        await interaction.response.send_message(f":frame_photo: Welcome card background set!")
+    else:
+        db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', 1) ON CONFLICT(guild_id) DO UPDATE SET image_url = NULL", (interaction.guild_id,))
+        await interaction.response.send_message(":frame_photo: Welcome card background reset to default.")
+
+
+@_welcome_group.command(name="toggle", description="Enable or disable welcome messages")
+@app_commands.describe(enabled="True to enable, False to disable")
+async def welcome_toggle(interaction: discord.Interaction, enabled: bool):
+    db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', ?) ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    await interaction.response.send_message(f":white_check_mark: Welcome messages **{'enabled' if enabled else 'disabled'}**")
+
+
+@_welcome_group.command(name="test", description="Preview the welcome message and card")
+async def welcome_test(interaction: discord.Interaction):
+    await interaction.response.defer()
+    settings = _get_welcome_settings(interaction.guild_id)
+    text = "Welcome to the server!"
+    if settings:
+        text = _format_welcome_text(settings["message"], interaction.user, interaction.guild)
+    img_buf = await _generate_welcome_image(interaction.user, interaction.guild, settings.get("image_url") if settings else None)
+    if img_buf:
+        await interaction.followup.send(text, file=discord.File(img_buf, "welcome.png"))
+    else:
+        await interaction.followup.send(text)
+
+
+bot.tree.add_command(_welcome_group)
+
+
+_goodbye_group = app_commands.Group(name="goodbye", description="Set up goodbye messages", guild_only=True)
+
+
+@_goodbye_group.command(name="channel", description="Set the goodbye message channel")
+@app_commands.describe(channel="The channel to post goodbye messages in")
+async def goodbye_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    db_execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, 'Goodbye {user.name}, we will miss you!', 1) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild_id, channel.id, channel.id))
+    await interaction.response.send_message(f":white_check_mark: Goodbye messages will be sent to {channel.mention}")
+
+
+@_goodbye_group.command(name="message", description="Set the goodbye message text")
+@app_commands.describe(text='Message text. Use {user}, {user.name}, {server}')
+async def goodbye_message(interaction: discord.Interaction, text: str):
+    db_execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, ?, 1) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    await interaction.response.send_message(f":white_check_mark: Goodbye message set!\n```{text}```")
+
+
+@_goodbye_group.command(name="toggle", description="Enable or disable goodbye messages")
+@app_commands.describe(enabled="True to enable, False to disable")
+async def goodbye_toggle(interaction: discord.Interaction, enabled: bool):
+    db_execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Goodbye {user.name}!', ?) ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    await interaction.response.send_message(f":white_check_mark: Goodbye messages **{'enabled' if enabled else 'disabled'}**")
+
+
+bot.tree.add_command(_goodbye_group)
+
+
+_welcomedm_group = app_commands.Group(name="welcomedm", description="Set up welcome DMs for new members", guild_only=True)
+
+
+@_welcomedm_group.command(name="toggle", description="Enable or disable welcome DMs")
+@app_commands.describe(enabled="True to enable, False to disable")
+async def welcomedm_toggle(interaction: discord.Interaction, enabled: bool):
+    db_execute("INSERT INTO welcome_dm_settings (guild_id, enabled, message) VALUES (?, ?, 'Welcome to **{server}**!') ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    await interaction.response.send_message(f":white_check_mark: Welcome DMs **{'enabled' if enabled else 'disabled'}**")
+
+
+@_welcomedm_group.command(name="message", description="Set the welcome DM text")
+@app_commands.describe(text='Message text. Use {user}, {user.name}, {server}')
+async def welcomedm_message(interaction: discord.Interaction, text: str):
+    db_execute("INSERT INTO welcome_dm_settings (guild_id, enabled, message) VALUES (?, 0, ?) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    await interaction.response.send_message(f":white_check_mark: Welcome DM message set!\n```{text}```")
+
+
+bot.tree.add_command(_welcomedm_group)
+
+
+_autorole_group = app_commands.Group(name="autorole", description="Manage auto-assign roles for new members", guild_only=True)
+
+
+@_autorole_group.command(name="add", description="Add a role that gets auto-assigned to new members")
+@app_commands.describe(role="The role to auto-assign")
+async def autorole_add(interaction: discord.Interaction, role: discord.Role):
+    db_execute("INSERT OR IGNORE INTO autoroles (guild_id, role_id) VALUES (?, ?)", (interaction.guild_id, role.id))
+    await interaction.response.send_message(f":white_check_mark: **{role.name}** will be auto-assigned to new members.")
+
+
+@_autorole_group.command(name="remove", description="Stop auto-assigning a role to new members")
+@app_commands.describe(role="The role to remove from auto-assign")
+async def autorole_remove(interaction: discord.Interaction, role: discord.Role):
+    db_execute("DELETE FROM autoroles WHERE guild_id = ? AND role_id = ?", (interaction.guild_id, role.id))
+    await interaction.response.send_message(f":wastebasket: **{role.name}** will no longer be auto-assigned.")
+
+
+@_autorole_group.command(name="list", description="List all auto-assign roles")
+async def autorole_list(interaction: discord.Interaction):
+    role_ids = _get_autoroles(interaction.guild_id)
+    if not role_ids:
+        await interaction.response.send_message(":information_source: No auto-assign roles configured.")
+        return
+    roles = [interaction.guild.get_role(rid) for rid in role_ids]
+    role_mentions = [r.mention for r in roles if r]
+    await interaction.response.send_message(f":scroll: Auto-assign roles:\n" + "\n".join(f"- {r}" for r in role_mentions))
+
+
+bot.tree.add_command(_autorole_group)
+
 
 bot.run(TOKEN)
