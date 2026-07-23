@@ -3028,6 +3028,7 @@ _last_image_prompt: dict[int, str] = {}  # channel_id -> last prompt used
 _last_search_images: dict[int, list[str]] = {}  # channel_id -> image URLs from last search
 _voice_text_channels: dict[int, int] = {}  # guild_id -> text_channel_id for speech context
 _voice_recv_active: dict[int, bool] = {}  # guild_id -> whether voice recv is currently active
+_voice_recv_locks: dict[int, asyncio.Lock] = {}  # guild_id -> lock for serializing speech processing
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -4351,13 +4352,19 @@ async def slash_vjoin(interaction: discord.Interaction):
     # Set up speech recognition
     loop = asyncio.get_running_loop()
     guild_id = guild.id
+    lock = _voice_recv_locks.setdefault(guild.id, asyncio.Lock())
     def make_text_cb():
-        def text_cb(user, text):
-            print(f"[VOICE RECV DEBUG] text_cb called: user={user}, text='{text}'")
+        voice_guild_id = guild.id
+        async def text_cb_async(user, text):
             if not text or len(text.strip()) < 2:
                 return
+            async with _voice_recv_locks.setdefault(voice_guild_id, asyncio.Lock()):
+                if not _voice_recv_active.get(voice_guild_id):
+                    return
+                await _handle_voice_speech(voice_guild_id, user, text.strip(), loop)
+        def text_cb(user, text):
             try:
-                coro = _handle_voice_speech(guild_id, user, text.strip(), loop)
+                coro = text_cb_async(user, text)
                 asyncio.run_coroutine_threadsafe(coro, loop)
             except Exception:
                 pass
@@ -4370,14 +4377,13 @@ async def slash_vjoin(interaction: discord.Interaction):
                 print(f"[VOICE RECV DEBUG] Google recognized: '{text}' from {user}")
                 return text
             except sr.UnknownValueError:
-                print(f"[VOICE RECV DEBUG] Google could not understand audio from {user}")
                 return None
             except sr.RequestError as e:
                 print(f"[VOICE RECV DEBUG] Google API error: {e}")
                 return None
         return process_cb
     try:
-        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=8)
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=3)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
     except Exception as e:
