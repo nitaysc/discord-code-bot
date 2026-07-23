@@ -75,7 +75,7 @@ _PROVIDER_RESET_DATE = {}
 def _register_provider(name, base_url, api_key, text_model, vision_model, daily_limit=None):
     _PROVIDERS.append({
         "name": name,
-        "client": OpenAI(base_url=base_url, api_key=api_key, timeout=8),
+        "client": OpenAI(base_url=base_url, api_key=api_key, timeout=5),
         "text_model": text_model,
         "vision_model": vision_model,
         "daily_limit": daily_limit,
@@ -2668,7 +2668,7 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
 
 
 AI_TIMEOUT = 40
-_AI_SEMAPHORE = asyncio.Semaphore(3)
+_AI_SEMAPHORE = asyncio.Semaphore(5)
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
@@ -3335,7 +3335,7 @@ async def on_message(message):
                             if visible_answer:
                                 tts_text = re.sub(r'<[^>]+>', '', visible_answer)  # strip mentions/emotes
                                 tts_text = re.sub(r'https?://\S+', '', tts_text)  # strip URLs
-                                tts_text = tts_text.strip()[:2000]
+                                tts_text = tts_text.strip()[:1000]
                                 if tts_text:
                                     asyncio.ensure_future(_speak_in_voice(message.guild, tts_text))
                         action_results = await execute_admin_actions(message, answer)
@@ -4349,7 +4349,7 @@ async def _tts_queue_worker(guild_id: int):
                 continue
             vc = guild.voice_client
             import edge_tts
-            communicate = edge_tts.Communicate(text[:2000], voice)
+            communicate = edge_tts.Communicate(text[:1000], voice)
             with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
                 tmp_path = f.name
             await communicate.save(tmp_path)
@@ -4378,7 +4378,7 @@ async def _speak_in_voice(guild: discord.Guild, text: str, voice: str | None = N
     queue = _tts_queues.setdefault(guild.id, asyncio.Queue())
     if guild.id not in _tts_queue_workers or _tts_queue_workers[guild.id].done():
         _tts_queue_workers[guild.id] = asyncio.create_task(_tts_queue_worker(guild.id))
-    await queue.put((text[:2000], voice))
+    await queue.put((text[:1000], voice))
     return True
 
 
@@ -4497,7 +4497,7 @@ async def _handle_voice_speech(guild_id: int, user, text: str, loop):
                 except Exception:
                     pass
             tts_text = re.sub(r'<[^>]+>', '', visible)
-            tts_text = re.sub(r'https?://\S+', '', tts_text).strip()[:2000]
+            tts_text = re.sub(r'https?://\S+', '', tts_text).strip()[:1000]
             if tts_text:
                 asyncio.create_task(_speak_in_voice(guild, tts_text))
     except Exception as e:
