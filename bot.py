@@ -2604,9 +2604,38 @@ async def send_raw_file(channel, content: str, file_type: str | None):
         file=discord.File(tmp.name, filename=filename),
     )
     os.unlink(tmp.name)
-
-
 _last_ai_call = 0.0
+
+_GARBAGE_PATTERNS = [
+    ":book: #",
+    "User Safety:",
+    "Response Safety:",
+    "Safety Categories:",
+    "In the #",
+    "In the Discord server",
+    "In the conversation",
+    "In the channel",
+    "Here's a summary of",
+    "This is a summary of",
+]
+
+
+def _clean_response(text: str) -> str:
+    lines = text.split("\n")
+    cleaned = []
+    stripped_any = False
+    for line in lines:
+        stripped = line.strip()
+        if any(stripped.startswith(p) for p in _GARBAGE_PATTERNS):
+            print(f"[CLEAN] stripped garbage line: {stripped[:80]}")
+            stripped_any = True
+            continue
+        cleaned.append(line)
+    if stripped_any:
+        return "\n".join(cleaned).strip()
+    return text
+
+
 def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
               temperature: float = 0.5, max_tokens: int = 4096,
               image_urls: list[str] | None = None,
@@ -2660,7 +2689,12 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
             if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
                 if name in _PROVIDER_USAGE:
                     _PROVIDER_USAGE[name] += 1
-                return response.choices[0].message.content
+                raw = response.choices[0].message.content
+                cleaned = _clean_response(raw)
+                if cleaned:
+                    return cleaned
+                print(f"[PROVIDER] {name}: response was all garbage, falling through")
+                continue
             return ""
         except Exception as e:
             err_str = str(e)
