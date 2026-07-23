@@ -2672,6 +2672,9 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
+                    if "per 86400s" in err_str or "per 24h" in err_str or "daily" in err_str.lower():
+                        print(f"[PROVIDER] {name} daily rate limit hit on {use_model}, skipping: {e}")
+                        break
                     wait = (2 ** attempt) + random.uniform(0, 2)
                     print(f"[RETRY] {name} rate-limited on {use_model} (attempt {attempt+1}/6), waiting {wait:.1f}s: {e}")
                     time.sleep(wait)
