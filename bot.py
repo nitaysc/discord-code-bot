@@ -3431,7 +3431,7 @@ async def on_message(message):
                             except Exception:
                                 pass
                         # Speak in voice if bot is in a voice channel in this guild
-                        if message.guild and message.guild.voice_client and message.guild.getattr(voice_client, 'connected', False) or (hasattr(voice_client, 'is_connected') and voice_client.is_connected()):
+                        if message.guild and message.guild.voice_client and (getattr(message.guild.voice_client, 'connected', False) or (hasattr(message.guild.voice_client, 'is_connected') and message.guild.voice_client.is_connected())):
                             if visible_answer:
                                 tts_text = re.sub(r'<[^>]+>', '', visible_answer)  # strip mentions/emotes
                                 tts_text = re.sub(r'https?://\S+', '', tts_text)  # strip URLs
@@ -4447,7 +4447,7 @@ async def _tts_queue_worker(guild_id: int):
                 break
             text, voice = item
             guild = bot.get_guild(guild_id)
-            if not guild or not guild.voice_client or not guild.getattr(voice_client, 'connected', False) or (hasattr(voice_client, 'is_connected') and voice_client.is_connected()):
+            if not guild or not guild.voice_client or not (getattr(guild.voice_client, 'connected', False) or (hasattr(guild.voice_client, 'is_connected') and guild.voice_client.is_connected())):
                 continue
             vc = guild.voice_client
             import edge_tts
@@ -4473,7 +4473,7 @@ async def _tts_queue_worker(guild_id: int):
 
 async def _speak_in_voice(guild: discord.Guild, text: str, voice: str | None = None):
     """Queue TTS for playback (sequential per guild, avoids 'Already playing audio')."""
-    if not guild.voice_client or not guild.getattr(voice_client, 'connected', False) or (hasattr(voice_client, 'is_connected') and voice_client.is_connected()):
+    if not guild.voice_client or not (getattr(guild.voice_client, 'connected', False) or (hasattr(guild.voice_client, 'is_connected') and guild.voice_client.is_connected())):
         return False
     if voice is None:
         voice = _get_tts_voice(guild.id, text)
