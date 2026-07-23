@@ -6058,23 +6058,39 @@ from PIL import Image, ImageDraw, ImageFont, ImageFilter as _ImageFilter
 import textwrap as _textwrap
 
 def _get_welcome_settings(guild_id: int) -> dict | None:
-    row = db_execute("SELECT channel_id, message, image_url, enabled FROM welcome_settings WHERE guild_id = ?", (guild_id,))
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id, message, image_url, enabled FROM welcome_settings WHERE guild_id = ?", (guild_id,))
+    row = cur.fetchone()
+    conn.close()
     if not row:
         return None
     return {"channel_id": row[0], "message": row[1], "image_url": row[2], "enabled": row[3]}
 
 def _get_goodbye_settings(guild_id: int) -> dict | None:
-    row = db_execute("SELECT channel_id, message, enabled FROM goodbye_settings WHERE guild_id = ?", (guild_id,))
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT channel_id, message, enabled FROM goodbye_settings WHERE guild_id = ?", (guild_id,))
+    row = cur.fetchone()
+    conn.close()
     if not row:
         return None
     return {"channel_id": row[0], "message": row[1], "enabled": row[2]}
 
 def _get_autoroles(guild_id: int) -> list[int]:
-    rows = db_execute("SELECT role_id FROM autoroles WHERE guild_id = ?", (guild_id,), fetch_all=True)
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT role_id FROM autoroles WHERE guild_id = ?", (guild_id,))
+    rows = cur.fetchall()
+    conn.close()
     return [r[0] for r in rows] if rows else []
 
 def _get_welcome_dm(guild_id: int) -> dict:
-    row = db_execute("SELECT enabled, message FROM welcome_dm_settings WHERE guild_id = ?", (guild_id,))
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT enabled, message FROM welcome_dm_settings WHERE guild_id = ?", (guild_id,))
+    row = cur.fetchone()
+    conn.close()
     if not row:
         return {"enabled": 0, "message": "Welcome to **{server}**! Check out the rules in #rules!"}
     return {"enabled": row[0], "message": row[1]}
@@ -6242,32 +6258,44 @@ _welcome_group = app_commands.Group(name="welcome", description="Set up welcome 
 @_welcome_group.command(name="channel", description="Set the welcome message channel")
 @app_commands.describe(channel="The channel to post welcome messages in")
 async def welcome_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, 'Welcome {user} to **{server}**! You are member **#{count}**!', 1) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild_id, channel.id, channel.id))
+    conn = get_db()
+    conn.execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, 'Welcome {user} to **{server}**! You are member **#{count}**!', 1) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild_id, channel.id, channel.id))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Welcome messages will be sent to {channel.mention}")
 
 
 @_welcome_group.command(name="message", description="Set the welcome message text")
 @app_commands.describe(text='Message text. Use {user}, {user.name}, {server}, {count}, {count.ordinal}')
 async def welcome_message(interaction: discord.Interaction, text: str):
-    db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, ?, 1) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    conn = get_db()
+    conn.execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, ?, 1) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Welcome message set!\n```{text}```")
 
 
 @_welcome_group.command(name="image", description="Set a background image URL for the welcome card")
 @app_commands.describe(url="Direct image URL for the background. Leave empty to reset to default.")
 async def welcome_image(interaction: discord.Interaction, url: str = None):
+    conn = get_db()
     if url:
-        db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, image_url, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', ?, 1) ON CONFLICT(guild_id) DO UPDATE SET image_url = ?", (interaction.guild_id, url, url))
+        conn.execute("INSERT INTO welcome_settings (guild_id, channel_id, message, image_url, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', ?, 1) ON CONFLICT(guild_id) DO UPDATE SET image_url = ?", (interaction.guild_id, url, url))
         await interaction.response.send_message(f":frame_photo: Welcome card background set!")
     else:
-        db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', 1) ON CONFLICT(guild_id) DO UPDATE SET image_url = NULL", (interaction.guild_id,))
+        conn.execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', 1) ON CONFLICT(guild_id) DO UPDATE SET image_url = NULL", (interaction.guild_id,))
         await interaction.response.send_message(":frame_photo: Welcome card background reset to default.")
+    conn.commit()
+    conn.close()
 
 
 @_welcome_group.command(name="toggle", description="Enable or disable welcome messages")
 @app_commands.describe(enabled="True to enable, False to disable")
 async def welcome_toggle(interaction: discord.Interaction, enabled: bool):
-    db_execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', ?) ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    conn = get_db()
+    conn.execute("INSERT INTO welcome_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Welcome {user} to **{server}**!', ?) ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Welcome messages **{'enabled' if enabled else 'disabled'}**")
 
 
@@ -6294,21 +6322,30 @@ _goodbye_group = app_commands.Group(name="goodbye", description="Set up goodbye 
 @_goodbye_group.command(name="channel", description="Set the goodbye message channel")
 @app_commands.describe(channel="The channel to post goodbye messages in")
 async def goodbye_channel(interaction: discord.Interaction, channel: discord.TextChannel):
-    db_execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, 'Goodbye {user.name}, we will miss you!', 1) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild_id, channel.id, channel.id))
+    conn = get_db()
+    conn.execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, ?, 'Goodbye {user.name}, we will miss you!', 1) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?", (interaction.guild_id, channel.id, channel.id))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Goodbye messages will be sent to {channel.mention}")
 
 
 @_goodbye_group.command(name="message", description="Set the goodbye message text")
 @app_commands.describe(text='Message text. Use {user}, {user.name}, {server}')
 async def goodbye_message(interaction: discord.Interaction, text: str):
-    db_execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, ?, 1) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    conn = get_db()
+    conn.execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, ?, 1) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Goodbye message set!\n```{text}```")
 
 
 @_goodbye_group.command(name="toggle", description="Enable or disable goodbye messages")
 @app_commands.describe(enabled="True to enable, False to disable")
 async def goodbye_toggle(interaction: discord.Interaction, enabled: bool):
-    db_execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Goodbye {user.name}!', ?) ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    conn = get_db()
+    conn.execute("INSERT INTO goodbye_settings (guild_id, channel_id, message, enabled) VALUES (?, NULL, 'Goodbye {user.name}!', ?) ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Goodbye messages **{'enabled' if enabled else 'disabled'}**")
 
 
@@ -6321,14 +6358,20 @@ _welcomedm_group = app_commands.Group(name="welcomedm", description="Set up welc
 @_welcomedm_group.command(name="toggle", description="Enable or disable welcome DMs")
 @app_commands.describe(enabled="True to enable, False to disable")
 async def welcomedm_toggle(interaction: discord.Interaction, enabled: bool):
-    db_execute("INSERT INTO welcome_dm_settings (guild_id, enabled, message) VALUES (?, ?, 'Welcome to **{server}**!') ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    conn = get_db()
+    conn.execute("INSERT INTO welcome_dm_settings (guild_id, enabled, message) VALUES (?, ?, 'Welcome to **{server}**!') ON CONFLICT(guild_id) DO UPDATE SET enabled = ?", (interaction.guild_id, int(enabled), int(enabled)))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Welcome DMs **{'enabled' if enabled else 'disabled'}**")
 
 
 @_welcomedm_group.command(name="message", description="Set the welcome DM text")
 @app_commands.describe(text='Message text. Use {user}, {user.name}, {server}')
 async def welcomedm_message(interaction: discord.Interaction, text: str):
-    db_execute("INSERT INTO welcome_dm_settings (guild_id, enabled, message) VALUES (?, 0, ?) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    conn = get_db()
+    conn.execute("INSERT INTO welcome_dm_settings (guild_id, enabled, message) VALUES (?, 0, ?) ON CONFLICT(guild_id) DO UPDATE SET message = ?", (interaction.guild_id, text, text))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: Welcome DM message set!\n```{text}```")
 
 
@@ -6341,14 +6384,20 @@ _autorole_group = app_commands.Group(name="autorole", description="Manage auto-a
 @_autorole_group.command(name="add", description="Add a role that gets auto-assigned to new members")
 @app_commands.describe(role="The role to auto-assign")
 async def autorole_add(interaction: discord.Interaction, role: discord.Role):
-    db_execute("INSERT OR IGNORE INTO autoroles (guild_id, role_id) VALUES (?, ?)", (interaction.guild_id, role.id))
+    conn = get_db()
+    conn.execute("INSERT OR IGNORE INTO autoroles (guild_id, role_id) VALUES (?, ?)", (interaction.guild_id, role.id))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":white_check_mark: **{role.name}** will be auto-assigned to new members.")
 
 
 @_autorole_group.command(name="remove", description="Stop auto-assigning a role to new members")
 @app_commands.describe(role="The role to remove from auto-assign")
 async def autorole_remove(interaction: discord.Interaction, role: discord.Role):
-    db_execute("DELETE FROM autoroles WHERE guild_id = ? AND role_id = ?", (interaction.guild_id, role.id))
+    conn = get_db()
+    conn.execute("DELETE FROM autoroles WHERE guild_id = ? AND role_id = ?", (interaction.guild_id, role.id))
+    conn.commit()
+    conn.close()
     await interaction.response.send_message(f":wastebasket: **{role.name}** will no longer be auto-assigned.")
 
 
