@@ -74,7 +74,7 @@ _PROVIDER_RESET_DATE = {}
 def _register_provider(name, base_url, api_key, text_model, vision_model, daily_limit=None):
     _PROVIDERS.append({
         "name": name,
-        "client": OpenAI(base_url=base_url, api_key=api_key),
+        "client": OpenAI(base_url=base_url, api_key=api_key, timeout=10),
         "text_model": text_model,
         "vision_model": vision_model,
         "daily_limit": daily_limit,
@@ -4333,6 +4333,7 @@ async def _tts_queue_worker(guild_id: int):
     queue = _tts_queues.get(guild_id)
     if not queue:
         return
+    loop = asyncio.get_running_loop()
     while True:
         try:
             item = await queue.get()
@@ -4349,19 +4350,18 @@ async def _tts_queue_worker(guild_id: int):
                 tmp_path = f.name
             await communicate.save(tmp_path)
             source = discord.FFmpegPCMAudio(tmp_path, before_options="-loglevel warning")
-            done = asyncio.get_running_loop().create_future()
-            def _cleanup(e):
+            done = loop.create_future()
+            def _cleanup(e, _loop=loop, _done=done, _path=tmp_path):
                 try:
-                    os.unlink(tmp_path)
+                    os.unlink(_path)
                 except Exception:
                     pass
                 try:
-                    loop = asyncio.get_running_loop()
-                    loop.call_soon_threadsafe(lambda: done.set_result(None))
+                    _loop.call_soon_threadsafe(lambda: _done.set_result(None))
                 except Exception:
                     pass
             vc.play(source, after=_cleanup)
-            await asyncio.wait_for(done, timeout=None)
+            await asyncio.wait_for(done, timeout=30)
         except Exception as e:
             print(f"[TTS WORKER] error: {e}")
 
