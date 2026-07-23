@@ -2561,9 +2561,14 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     if image_urls:
         valid_urls = [url for url in image_urls if _is_supported_image_url(url)]
         if not valid_urls:
-            print(f"[VISION] all {len(image_urls)} image URLs filtered out (unsupported formats)")
+            print(f"[VISION] all {len(image_urls)} image URLs filtered out, falling back to text-only")
+            image_urls = None
+        else:
+            image_urls = valid_urls
+
+    if image_urls:
         content_parts = [{"type": "text", "text": prompt}]
-        for url in valid_urls:
+        for url in image_urls:
             content_parts.append({
                 "type": "image_url",
                 "image_url": {"url": url},
@@ -3071,7 +3076,7 @@ async def on_message(message):
             # No new images — reuse recent cached images from same channel (within 5 min)
             cached = _channel_image_cache.get(channel_id)
             if cached and time.time() - cached[1] < 300:
-                image_urls = cached[0]
+                image_urls = [url for url in cached[0] if _is_supported_image_url(url)]
 
         display_name = message.author.display_name
         history_entry = f"{display_name}: {content}"
