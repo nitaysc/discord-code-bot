@@ -2962,7 +2962,7 @@ async def on_message(message):
                                 m.id != bot.user.id for m in message.mentions
                             )
                             server_keywords = ["where", "wheres", "where's", "everyone", "people", "member", "members", "server", "channel", "channels", "role", "roles", "create", "make", "add"]
-                            if has_other_mentions or any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"] + server_keywords):
+                            if any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"] + server_keywords):
                                 voice_info = get_voice_info(message.guild)
                                 server_info = get_server_info(message.guild)
                                 context_extra = f"\n\n[Server info:\n{server_info}]\n\n[Voice channels:\n{voice_info}]"
