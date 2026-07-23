@@ -381,20 +381,61 @@ class ValorantProfileSelect(discord.ui.Select):
 SEARCH_TRIGGER_WORDS = {
     "latest", "current", "today", "now", "news", "weather", "price", "prices",
     "score", "scores", "update", "recent", "happened", "happening", "live",
-    "stock", "crypto", "bitcoin", "election", "who won", "who won", "winner", "winners", "results",
+    "stock", "crypto", "bitcoin", "election", "who won", "winner", "winners", "results",
     "release date", "when did", "how old is", "age of", "net worth", "did happen", "has happened",
-    "look online", "look up", "search for", "find online", "check online",
-    "what is", "how to", "where is", "who is", "who was",
+    "look online", "look up", "search for", "find online", "check online", "google", "look", "search", "find", "web",
+    "what is", "how to", "how much", "how many", "how old", "where is", "who is", "who was", "why is", "why are",
     "world cup", "olympics", "super bowl", "champions league", "eurovision",
     "2025", "2026", "2027", "yesterday", "tomorrow", "this week", "last week",
+    "cost", "costs", "buy", "coming out", "launch", "announced", "available",
 }
+
+
+def _clean_search_question(question: str) -> str:
+    """Remove bot mentions, extra punctuation, and filler words."""
+    q = re.sub(r"<@!?\d+>", "", question)
+    q = re.sub(r"[@\s]+\bnull\b", "", q, flags=re.IGNORECASE)
+    q = re.sub(r"\bnull\b", "", q, flags=re.IGNORECASE)
+    q = re.sub(r"[^\w\s'\-?]", " ", q)
+    q = re.sub(r"\s+", " ", q).strip()
+    return q
 
 
 def should_search(question: str) -> tuple[bool, str]:
     lowered = question.lower()
     if any(word in lowered for word in SEARCH_TRIGGER_WORDS):
-        return True, question
+        return True, _clean_search_question(question)
+    # Question starters that usually need current facts
+    question_starters = (
+        "when ", "where ", "who ", "how much ", "how many ", "how old ",
+        "why is ", "why are ", "what is ", "what are ", "what was ", "what were ",
+    )
+    if lowered.startswith(question_starters):
+        return True, _clean_search_question(question)
     return False, ""
+
+
+async def _extract_search_query(question: str) -> str:
+    """Use the AI to turn a messy question into a concise Google search query."""
+    try:
+        clean = _clean_search_question(question)
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
+            model=MODEL,
+            messages=[
+                {"role": "system", "content": "You extract concise web search queries. Return ONLY the query, nothing else. Use the most relevant keywords. Max 10 words."},
+                {"role": "user", "content": f"Extract a search query from: {clean}"},
+            ],
+            temperature=0.0,
+            max_tokens=40,
+        )
+        query = response.choices[0].message.content.strip()
+        # Remove quotes if the AI wraps them
+        query = query.strip('"').strip("'")
+        return query if query else clean
+    except Exception as e:
+        print(f"[SEARCH] query extraction failed: {e}")
+        return _clean_search_question(question)
 
 
 LANG_EXTENSIONS = {
@@ -2275,12 +2316,15 @@ async def answer_with_web_search_if_needed(
     image_urls: list[str] | None = None,
     temperature: float = 0.7,
 ) -> str:
-    needs_search, search_query = should_search(prompt)
+    needs_search, raw_query = should_search(prompt)
     if needs_search:
+        # Use AI to extract a clean, concise search query
+        search_query = await _extract_search_query(raw_query)
+        print(f"[SEARCH] triggered, extracted query: '{search_query}'")
         search_results = ""
         for query in [search_query, " ".join(
-            w for w in search_query.split()
-            if w.lower() not in {"how", "to", "a", "the", "is", "are", "for", "of", "in", "on", "and", "or", "i", "you", "me", "tell", "something", "look", "online", "search", "find", "check"}
+            w for w in raw_query.split()
+            if w.lower() not in {"how", "to", "a", "the", "is", "are", "for", "of", "in", "on", "and", "or", "i", "you", "me", "tell", "something", "look", "online", "search", "find", "check", "web", "xdxd", "please", "thank", "thanks"}
         )]:
             if not query or query == search_results:
                 continue
