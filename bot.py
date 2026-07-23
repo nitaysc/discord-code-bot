@@ -4377,6 +4377,8 @@ def _get_tts_voice(guild_id: int | None, text: str) -> str:
     lang = _voice_tts_lang.get(guild_id) if guild_id else None
     if lang == "he":
         return "he-IL-HilaNeural"
+    if lang == "in":
+        return "en-IN-PrabhatNeural"
     if re.search(r'[\u0590-\u05FF]', text):
         return "he-IL-HilaNeural"
     return "en-US-JennyNeural"
@@ -4482,13 +4484,14 @@ async def slash_vjoin(interaction: discord.Interaction):
         await interaction.followup.send(f":loud_sound: Joined **{voice}** but could not start listening: {e}")
         return
     _voice_tts_lang.setdefault(guild.id, "he")
-    voice_lang = "Hebrew" if _voice_tts_lang[guild.id] == "he" else "English"
+    vl = _voice_tts_lang[guild.id]
+    voice_lang = {"he": "Hebrew", "en": "English", "in": "Indian English"}.get(vl, "Hebrew")
     await interaction.followup.send(f":loud_sound: Joined **{voice}** and listening. TTS language: **{voice_lang}**. Talk to me!")
     print(f"[VOICE] Joined {voice.name} with voice recv in {guild.name}")
 
 
-@bot.tree.command(name="vvoice", description="Set TTS voice language (hebrew or english)")
-@app_commands.describe(language="hebrew or english")
+@bot.tree.command(name="vvoice", description="Set TTS voice language (hebrew, english, or indian)")
+@app_commands.describe(language="hebrew, english, or indian")
 async def slash_vvoice(interaction: discord.Interaction, language: str):
     lang = language.lower().strip()
     if lang in ("he", "hebrew", "iw"):
@@ -4497,8 +4500,11 @@ async def slash_vvoice(interaction: discord.Interaction, language: str):
     elif lang in ("en", "english", "us"):
         _voice_tts_lang[interaction.guild_id] = "en"
         await interaction.response.send_message(f":speaking_head: TTS voice set to **English** (en-US-JennyNeural)")
+    elif lang in ("in", "indian", "india", "hi"):
+        _voice_tts_lang[interaction.guild_id] = "in"
+        await interaction.response.send_message(f":speaking_head: TTS voice set to **Indian English** (en-IN-PrabhatNeural)")
     else:
-        await interaction.response.send_message(f":x: Use `hebrew` or `english`", ephemeral=True)
+        await interaction.response.send_message(f":x: Use `hebrew`, `english`, or `indian`", ephemeral=True)
 
 
 _VOICE_FILLER = re.compile(r'^(אה|הא|א|אוקיי|כן|לא|יא|יאללה|נו|טוב|וואי|די|סתום|סתמו|רגע|hello|hey|hi|yeah|no|ok|okay|uh|um|ah|oh|huh|מה|למה|איך)$', re.IGNORECASE)
