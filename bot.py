@@ -28,6 +28,15 @@ import wavelink
 from ddgs import DDGS
 from PIL import Image, ImageDraw, ImageFont
 
+try:
+    from discord.ext import voice_recv as _voice_recv
+    from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
+    HAS_VOICE_RECV = True
+except ImportError:
+    HAS_VOICE_RECV = False
+    _voice_recv = None
+    SpeechRecognitionSink = None
+
 load_dotenv()
 
 TOKEN = os.getenv("DISCORD_TOKEN")
@@ -2124,17 +2133,33 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
             return await _action_removerole(message, target, role)
 
         if action == "joinvoice":
+            if not HAS_VOICE_RECV:
+                return ":x: voice_recv library not installed."
             if not message.author.voice:
                 return ":x: You are not in a voice channel."
             try:
-                vc = message.guild.voice_client
-                if vc:
-                    if vc.channel != message.author.voice.channel:
-                        await vc.move_to(message.author.voice.channel)
-                        return f":loud_sound: Moved to **{message.author.voice.channel}**"
-                    return f":loud_sound: Already in **{message.author.voice.channel}**"
-                await message.author.voice.channel.connect()
-                return f":loud_sound: Joined **{message.author.voice.channel}**"
+                guild = message.guild
+                existing = guild.voice_client
+                if existing:
+                    existing.stop()
+                    await existing.disconnect()
+                voice = message.author.voice.channel
+                vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
+                _voice_text_channels[guild.id] = message.channel.id
+                loop = asyncio.get_running_loop()
+                guild_id = guild.id
+                def text_cb(user, text):
+                    if not text or len(text.strip()) < 2:
+                        return
+                    try:
+                        coro = _handle_voice_speech(guild_id, user, text.strip(), loop)
+                        asyncio.run_coroutine_threadsafe(coro, loop)
+                    except Exception:
+                        pass
+                sink = SpeechRecognitionSink(text_cb=text_cb, default_recognizer='google', phrase_time_limit=8)
+                vc.listen(sink)
+                _voice_recv_active[guild.id] = True
+                return f":loud_sound: Joined **{voice}** and listening."
             except Exception as e:
                 return f":x: Could not join voice: {e}"
 
@@ -2988,6 +3013,8 @@ _channel_locks: dict[int, asyncio.Lock] = {}
 _channel_image_cache: dict[int, tuple[list[str], float]] = {}  # channel_id -> (urls, timestamp)
 _last_image_prompt: dict[int, str] = {}  # channel_id -> last prompt used
 _last_search_images: dict[int, list[str]] = {}  # channel_id -> image URLs from last search
+_voice_text_channels: dict[int, int] = {}  # guild_id -> text_channel_id for speech context
+_voice_recv_active: dict[int, bool] = {}  # guild_id -> whether voice recv is currently active
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -4286,29 +4313,97 @@ async def _speak_in_voice(guild: discord.Guild, text: str, voice: str = "en-US-J
         return False
 
 
-@bot.tree.command(name="vjoin", description="Join your voice channel for TTS chat")
+@bot.tree.command(name="vjoin", description="Join your voice channel to talk with Null via voice")
 async def slash_vjoin(interaction: discord.Interaction):
+    if not HAS_VOICE_RECV:
+        await interaction.response.send_message(":x: voice_recv library not installed. Run: pip install discord-ext-voice-recv SpeechRecognition", ephemeral=True)
+        return
     if not interaction.user.voice:
         await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
         return
+    await interaction.response.defer()
     voice = interaction.user.voice.channel
-    vc = interaction.guild.voice_client
-    if vc:
-        if vc.channel != voice:
-            await vc.move_to(voice)
-            await interaction.response.send_message(f":loud_sound: Moved to **{voice}**")
-        else:
-            await interaction.response.send_message(f":loud_sound: Already in **{voice}**")
-    else:
-        await voice.connect()
-        await interaction.response.send_message(f":loud_sound: Joined **{voice}**")
-    print(f"[VOICE] Joined {voice.name} in {interaction.guild.name}")
+    guild = interaction.guild
+    # Disconnect any existing voice client to avoid conflicts
+    existing = guild.voice_client
+    if existing:
+        existing.stop()
+        await existing.disconnect()
+    try:
+        vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
+    except Exception as e:
+        await interaction.followup.send(f":x: Could not connect: {e}")
+        return
+    _voice_text_channels[guild.id] = interaction.channel_id
+    # Set up speech recognition
+    loop = asyncio.get_running_loop()
+    guild_id = guild.id
+    def make_text_cb():
+        def text_cb(user, text):
+            if not text or len(text.strip()) < 2:
+                return
+            try:
+                coro = _handle_voice_speech(guild_id, user, text.strip(), loop)
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except Exception:
+                pass
+        return text_cb
+    try:
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), default_recognizer='google', phrase_time_limit=8)
+        vc.listen(sink)
+        _voice_recv_active[guild.id] = True
+    except Exception as e:
+        print(f"[VOICE RECV] Failed to start listening: {e}")
+        await interaction.followup.send(f":loud_sound: Joined **{voice}** but could not start listening: {e}")
+        return
+    await interaction.followup.send(f":loud_sound: Joined **{voice}** and listening. Talk to me!")
+    print(f"[VOICE] Joined {voice.name} with voice recv in {guild.name}")
+
+
+async def _handle_voice_speech(guild_id: int, user, text: str, loop):
+    """Called when speech is recognized. Processes through AI and speaks response."""
+    guild = bot.get_guild(guild_id)
+    if not guild or not guild.voice_client:
+        return
+    if not _voice_recv_active.get(guild_id):
+        return
+    channel_id = _voice_text_channels.get(guild_id)
+    if not channel_id:
+        return
+    channel = guild.get_channel(channel_id)
+    if not channel:
+        return
+    print(f"[VOICE SPEECH] {user.display_name if hasattr(user, 'display_name') else user}: {text}")
+    history_entry = f"{user.display_name if hasattr(user, 'display_name') else 'Someone'} (voice): {text}"
+    add_to_history(channel_id, "user", history_entry)
+    history = get_history(channel_id)
+    try:
+        _voice_recv_active[guild_id] = False
+        answer = await call_ai(CHAT_SYSTEM, text, history, temperature=0.7)
+        add_to_history(channel_id, "assistant", answer)
+        visible = "\n".join(line for line in answer.split("\n") if not line.strip().startswith("ACTION:"))
+        if visible:
+            for chunk in _chunk_text(visible):
+                try:
+                    await channel.send(f"**{user.display_name if hasattr(user, 'display_name') else 'Someone'} said:** {text}\n\n{chunk}")
+                except Exception:
+                    pass
+            tts_text = re.sub(r'<[^>]+>', '', visible)
+            tts_text = re.sub(r'https?://\S+', '', tts_text).strip()[:300]
+            if tts_text:
+                await _speak_in_voice(guild, tts_text)
+    except Exception as e:
+        print(f"[VOICE SPEECH] Error: {e}")
+    finally:
+        _voice_recv_active[guild_id] = True
 
 
 @bot.tree.command(name="vleave", description="Leave the voice channel")
 async def slash_vleave(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc:
+        _voice_recv_active.pop(interaction.guild_id, None)
+        _voice_text_channels.pop(interaction.guild_id, None)
         vc.stop()
         await vc.disconnect()
         await interaction.response.send_message(":mute: Left voice channel.")
@@ -4359,6 +4454,8 @@ async def slash_radio(interaction: discord.Interaction, station: str):
 async def slash_stopradio(interaction: discord.Interaction):
     vc = interaction.guild.voice_client
     if vc:
+        _voice_recv_active.pop(interaction.guild_id, None)
+        _voice_text_channels.pop(interaction.guild_id, None)
         vc.stop()
         await vc.disconnect()
     await interaction.response.send_message(":stop_button: Stopped.")
