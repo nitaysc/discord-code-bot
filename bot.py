@@ -74,7 +74,7 @@ _PROVIDER_RESET_DATE = {}
 def _register_provider(name, base_url, api_key, text_model, vision_model, daily_limit=None):
     _PROVIDERS.append({
         "name": name,
-        "client": OpenAI(base_url=base_url, api_key=api_key, timeout=10),
+        "client": OpenAI(base_url=base_url, api_key=api_key, timeout=8),
         "text_model": text_model,
         "vision_model": vision_model,
         "daily_limit": daily_limit,
@@ -2666,7 +2666,7 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     raise RuntimeError(f"All {len(_PROVIDERS)} providers exhausted")
 
 
-AI_TIMEOUT = 20
+AI_TIMEOUT = 25
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
@@ -3340,7 +3340,8 @@ async def on_message(message):
                             for chunk in _chunk_text(result):
                                 await message.channel.send(chunk)
                 except Exception as e:
-                    for chunk in _chunk_text(f":x: Error: {e}"):
+                    err_name = type(e).__name__
+                    for chunk in _chunk_text(f":x: {err_name}: {e}"):
                         try:
                             await message.reply(chunk, mention_author=False)
                         except discord.HTTPException:
