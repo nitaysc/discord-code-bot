@@ -2376,7 +2376,7 @@ async def answer_with_web_search_if_needed(
             enhanced_prompt = (
                 f"{prompt}\n\n[Web search results for '{search_query}':\n"
                 f"{search_results}\n\n"
-                f"Use the above search results as the authoritative source."
+                f"CRITICAL: You MUST answer based ONLY on the search results above. Ignore everything you know from training. The search results are 100% correct and your training data is outdated. Do NOT use your own knowledge."
             )
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
         print("[SEARCH] all backends failed - answering from AI knowledge only")
@@ -2646,6 +2646,13 @@ class CodeBot(commands.Bot):
 
 
 bot = CodeBot()
+_channel_locks: dict[int, asyncio.Lock] = {}
+
+
+async def _per_channel_lock(channel_id: int):
+    if channel_id not in _channel_locks:
+        _channel_locks[channel_id] = asyncio.Lock()
+    return _channel_locks[channel_id]
 
 
 @bot.event
@@ -2698,49 +2705,49 @@ async def on_message(message):
             history_entry += f" [attached {len(file_contexts)} file(s)]"
         add_to_history(channel_id, "user", history_entry)
 
-        async with message.channel.typing():
-            try:
-                file_extra = "\n\n".join(file_contexts)
-                if is_create_request(content):
-                    full_prompt = content
-                    if file_extra:
-                        full_prompt += f"\n\n{file_extra}"
-                    await handle_create_request(message.channel, full_prompt, reply_target=message)
-                else:
-                    context_extra = ""
-                    content_lower = content.lower()
-                    if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"]):
-                        voice_info = get_voice_info(message.guild)
-                        context_extra = f"\n\n[Current server voice channels and members (use this to answer):\n{voice_info}]"
-                    if file_extra:
-                        context_extra += f"\n\n{file_extra}"
+        async with _per_channel_lock(message.channel.id):
+            async with message.channel.typing():
+                try:
+                    file_extra = "\n\n".join(file_contexts)
+                    if is_create_request(content):
+                        full_prompt = content
+                        if file_extra:
+                            full_prompt += f"\n\n{file_extra}"
+                        await handle_create_request(message.channel, full_prompt, reply_target=message)
+                    else:
+                        context_extra = ""
+                        content_lower = content.lower()
+                        if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"]):
+                            voice_info = get_voice_info(message.guild)
+                            context_extra = f"\n\n[Current server voice channels and members (use this to answer):\n{voice_info}]"
+                        if file_extra:
+                            context_extra += f"\n\n{file_extra}"
 
-                    # Strong direct instruction for admin/moderation requests
-                    admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole"]
-                    if any(kw in content_lower for kw in admin_keywords):
-                        context_extra += "\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]"
+                        admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole"]
+                        if any(kw in content_lower for kw in admin_keywords):
+                            context_extra += "\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]"
 
-                    if any(w in content_lower for w in ["mute", "deafen"]) and any(w in content_lower for w in ["voice", "vc"]):
-                        context_extra += "\n[Voice action: use ACTION: voicemute @user or ACTION: deafen @user.]"
-                    elif "mute" in content_lower and not any(w in content_lower for w in ["voice", "vc"]):
-                        context_extra += "\n[Text mute: use ACTION: mute @user.]"
-                    if "deafen" in content_lower:
-                        context_extra += "\n[Voice action: use ACTION: deafen @user.]"
+                        if any(w in content_lower for w in ["mute", "deafen"]) and any(w in content_lower for w in ["voice", "vc"]):
+                            context_extra += "\n[Voice action: use ACTION: voicemute @user or ACTION: deafen @user.]"
+                        elif "mute" in content_lower and not any(w in content_lower for w in ["voice", "vc"]):
+                            context_extra += "\n[Text mute: use ACTION: mute @user.]"
+                        if "deafen" in content_lower:
+                            context_extra += "\n[Voice action: use ACTION: deafen @user.]"
 
-                    history = get_history(channel_id)
-                    prompt = content + context_extra
-                    answer = await answer_with_web_search_if_needed(
-                        prompt, history, image_urls=image_urls if image_urls else None
-                    )
-                    add_to_history(channel_id, "assistant", answer)
-                    visible_answer = "\n".join(
-                        line for line in answer.split("\n") if not line.strip().startswith("ACTION:")
-                    ).strip()
-                    if visible_answer:
-                        await message.reply(visible_answer, mention_author=False)
-                    action_results = await execute_admin_actions(message, answer)
-                    for result in action_results:
-                        await message.channel.send(result)
+                        history = get_history(channel_id)
+                        prompt = content + context_extra
+                        answer = await answer_with_web_search_if_needed(
+                            prompt, history, image_urls=image_urls if image_urls else None
+                        )
+                        add_to_history(channel_id, "assistant", answer)
+                        visible_answer = "\n".join(
+                            line for line in answer.split("\n") if not line.strip().startswith("ACTION:")
+                        ).strip()
+                        if visible_answer:
+                            await message.reply(visible_answer, mention_author=False)
+                        action_results = await execute_admin_actions(message, answer)
+                        for result in action_results:
+                            await message.channel.send(result)
             except Exception as e:
                 await message.reply(f":x: Error: {e}", mention_author=False)
         return
