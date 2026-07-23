@@ -2123,6 +2123,21 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                 return ":x: Member or role not found."
             return await _action_removerole(message, target, role)
 
+        if action == "joinvoice":
+            if not message.author.voice:
+                return ":x: You are not in a voice channel."
+            try:
+                vc = message.guild.voice_client
+                if vc:
+                    if vc.channel != message.author.voice.channel:
+                        await vc.move_to(message.author.voice.channel)
+                        return f":loud_sound: Moved to **{message.author.voice.channel}**"
+                    return f":loud_sound: Already in **{message.author.voice.channel}**"
+                await message.author.voice.channel.connect()
+                return f":loud_sound: Joined **{message.author.voice.channel}**"
+            except Exception as e:
+                return f":x: Could not join voice: {e}"
+
         return ""
     except Exception as e:
         return f":x: Admin action error: {e}"
@@ -3225,6 +3240,11 @@ async def on_message(message):
                             _save_user_note(message.author.id, "fact", fact)
                             context_extra += f"\n\n[Note auto-saved: {fact}]"
 
+                        # Voice join auto-detection
+                        if message.guild and any(w in content_lower for w in ["join voice", "come to voice", "come vc", "join vc", "voice chat", "talk in voice"]):
+                            if not message.guild.voice_client and message.author.voice:
+                                context_extra += "\n[The user wants you to join their voice channel. Use ACTION: joinvoice to connect.]"
+
                         admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole", "create", "move"]
                         if any(kw in content_lower for kw in admin_keywords):
                             hints = []
@@ -3265,6 +3285,14 @@ async def on_message(message):
                                 await message.channel.send(f"📷 **Images found:**\n{img_lines}")
                             except Exception:
                                 pass
+                        # Speak in voice if bot is in a voice channel in this guild
+                        if message.guild and message.guild.voice_client and message.guild.voice_client.is_connected():
+                            if visible_answer:
+                                tts_text = re.sub(r'<[^>]+>', '', visible_answer)  # strip mentions/emotes
+                                tts_text = re.sub(r'https?://\S+', '', tts_text)  # strip URLs
+                                tts_text = tts_text.strip()[:300]
+                                if tts_text:
+                                    asyncio.ensure_future(_speak_in_voice(message.guild, tts_text))
                         action_results = await execute_admin_actions(message, answer)
                         for result in action_results:
                             for chunk in _chunk_text(result):
@@ -4232,6 +4260,60 @@ async def slash_undeafen(interaction: discord.Interaction, member: discord.Membe
         _synthetic_message(interaction), member, reason
     )
     await interaction.response.send_message(result)
+
+
+async def _speak_in_voice(guild: discord.Guild, text: str, voice: str = "en-US-JennyNeural"):
+    """TTS using edge-tts, played through the guild's voice client."""
+    vc = guild.voice_client
+    if not vc or not vc.is_connected():
+        return False
+    try:
+        import edge_tts
+        communicate = edge_tts.Communicate(text[:200], voice)
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+            tmp_path = f.name
+        await communicate.save(tmp_path)
+        source = discord.FFmpegPCMAudio(tmp_path, before_options="-loglevel warning")
+        def _cleanup(e):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+        vc.play(source, after=_cleanup)
+        return True
+    except Exception as e:
+        print(f"[TTS] error: {e}")
+        return False
+
+
+@bot.tree.command(name="vjoin", description="Join your voice channel for TTS chat")
+async def slash_vjoin(interaction: discord.Interaction):
+    if not interaction.user.voice:
+        await interaction.response.send_message(":x: Join a voice channel first!", ephemeral=True)
+        return
+    voice = interaction.user.voice.channel
+    vc = interaction.guild.voice_client
+    if vc:
+        if vc.channel != voice:
+            await vc.move_to(voice)
+            await interaction.response.send_message(f":loud_sound: Moved to **{voice}**")
+        else:
+            await interaction.response.send_message(f":loud_sound: Already in **{voice}**")
+    else:
+        await voice.connect()
+        await interaction.response.send_message(f":loud_sound: Joined **{voice}**")
+    print(f"[VOICE] Joined {voice.name} in {interaction.guild.name}")
+
+
+@bot.tree.command(name="vleave", description="Leave the voice channel")
+async def slash_vleave(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc:
+        vc.stop()
+        await vc.disconnect()
+        await interaction.response.send_message(":mute: Left voice channel.")
+    else:
+        await interaction.response.send_message(":x: Not in a voice channel.", ephemeral=True)
 
 
 @bot.tree.command(name="radio", description="Play internet radio (lofi, jazz, rock, chill, pop, edm)")
