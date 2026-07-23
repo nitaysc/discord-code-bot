@@ -8,6 +8,7 @@ import tempfile
 import textwrap
 import threading
 import time
+import traceback
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -3080,7 +3081,6 @@ async def on_message(message):
 
                         trigger_img = (any(kw in content_lower for kw in img_keywords) and any(noun in stripped for noun in img_nouns))
                         if trigger_img or is_img_reply:
-                            await message.channel.typing()
                             if is_img_reply and not trigger_img:
                                 prompt = content
                             else:
@@ -3107,7 +3107,8 @@ async def on_message(message):
                                         else:
                                             await message.reply(f":x: Image generation failed (status {resp.status})")
                             except Exception as e:
-                                await message.reply(f":x: Image generation error: {e}")
+                                traceback.print_exc()
+                                await message.reply(f":x: Image generation error: {type(e).__name__}: {e}")
                             return
 
                         if replied_content:
