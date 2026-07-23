@@ -446,47 +446,16 @@ def _strip_filler_words(text: str) -> str:
     return " ".join(words)
 
 
-async def _extract_search_query(question: str) -> str:
-    """Use the AI to turn a messy question into a concise Google search query."""
+def _extract_search_query(question: str) -> str:
+    """Turn a messy question into a concise search query using deterministic cleanup."""
     clean = _clean_search_question(question)
-    fallback = _strip_filler_words(clean)
-    try:
-        response = await asyncio.to_thread(
-            client.chat.completions.create,
-            model=MODEL,
-            messages=[
-                {"role": "system", "content": textwrap.dedent("""\
-                    You turn messy user questions into concise Google search queries.
-                    Rules:
-                    - Output ONLY the query, no quotes, no explanation, no intro.
-                    - Max 8 words.
-                    - Keep product names, brands, dates, numbers, prices.
-                    - Remove greetings, slang, filler, and question words.
-
-                    Examples:
-                    User: hey bro whats the latest graphic card nvidia made and how much it costs
-                    Query: latest NVIDIA graphics card price
-
-                    User: look online when is gta vi coming out
-                    Query: GTA VI release date
-
-                    User: search latest iphone price 2026
-                    Query: iPhone price 2026
-                """)},
-                {"role": "user", "content": f"User: {clean}\nQuery:"},
-            ],
-            temperature=0.0,
-            max_tokens=25,
-        )
-        query = response.choices[0].message.content.strip()
-        query = query.strip('"').strip("'").strip()
-        # If AI failed to shorten, use fallback
-        if not query or len(query.split()) > 12 or query.lower() == clean.lower():
-            return fallback
-        return query
-    except Exception as e:
-        print(f"[SEARCH] query extraction failed: {e}")
-        return fallback
+    query = _strip_filler_words(clean)
+    # Keep it short but preserve the most important words (brand/product/topic first)
+    words = query.split()
+    if len(words) > 10:
+        # Simple heuristic: keep first 4 and last 2 words, drop middle filler
+        query = " ".join(words[:4] + words[-2:])
+    return query[:120]
 
 
 LANG_EXTENSIONS = {
@@ -2369,8 +2338,8 @@ async def answer_with_web_search_if_needed(
 ) -> str:
     needs_search, raw_query = should_search(prompt)
     if needs_search:
-        # Use AI to extract a clean, concise search query
-        search_query = await _extract_search_query(raw_query)
+        # Extract a clean, concise search query
+        search_query = _extract_search_query(raw_query)
         print(f"[SEARCH] triggered, extracted query: '{search_query}'")
         search_results = ""
         for query in [search_query, " ".join(
