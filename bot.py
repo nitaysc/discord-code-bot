@@ -69,8 +69,8 @@ else:
         api_key=os.getenv("GEMINI_API_KEY"),
     )
 
-MODEL = os.getenv("AI_MODEL", "bbl/gpt-5.4" if FREETHEAI_KEY else "openrouter/free")
-VISION_MODEL = os.getenv("VISION_MODEL", "bbl/gpt-5.4")
+MODEL = os.getenv("AI_MODEL", "vova/gpt-5.5" if FREETHEAI_KEY else "openrouter/free")
+VISION_MODEL = os.getenv("VISION_MODEL", "kai/openrouter/free")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
