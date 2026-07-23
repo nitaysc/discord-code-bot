@@ -2059,7 +2059,6 @@ I'm a real bot with real features. If I say "I can't" and you know I can, call m
 
 CHAT_SYSTEM = textwrap.dedent(f"""\
 You're Null — a Discord bot that's actually cool to talk to. Quick, witty, helpful. No robotic vibes.
-Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC.
 {CHAT_CAPABILITIES}
 
 LANGUAGE RULES (IMPORTANT):
@@ -2304,7 +2303,8 @@ async def send_raw_file(channel, content: str, file_type: str | None):
 def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
               temperature: float = 0.5, max_tokens: int = 4096,
               image_urls: list[str] | None = None) -> str:
-    messages = [{"role": "system", "content": system}]
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
+    messages = [{"role": "system", "content": f"{system}\nCurrent UTC time: {now} UTC."}]
     if history:
         messages.extend(history)
 
