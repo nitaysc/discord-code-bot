@@ -2973,11 +2973,27 @@ async def on_message(message):
                                     if m.id == bot.user.id:
                                         continue
                                     created = m.created_at.strftime("%Y-%m-%d")
-                                    joined = m.joined_at.strftime("%Y-%m-%d") if hasattr(m, 'joined_at') and m.joined_at else "unknown"
+                                    joined = m.joined_at.strftime("%Y-%m-%d") if m.joined_at else "unknown"
                                     roles = ", ".join(r.mention for r in m.roles[1:]) if len(m.roles) > 1 else "none"
-                                    status = str(m.status) if hasattr(m, 'status') else "unknown"
-                                    activity = f"{m.activity.name}" if m.activity else "none"
-                                    context_extra += f"\n\n[Profile for {m.display_name} (@{m.name}): created={created}, joined={joined}, status={status}, activity={activity}, roles={roles}]"
+                                    devices = []
+                                    if m.desktop_status != discord.Status.offline:
+                                        devices.append(f"desktop={m.desktop_status}")
+                                    if m.web_status != discord.Status.offline:
+                                        devices.append(f"web={m.web_status}")
+                                    if m.mobile_status != discord.Status.offline:
+                                        devices.append(f"mobile={m.mobile_status}")
+                                    status_str = "offline"
+                                    if devices:
+                                        status_str = "online (" + ", ".join(devices) + ")"
+                                    elif m.status != discord.Status.offline:
+                                        status_str = str(m.status)
+                                    activity_names = []
+                                    for a in m.activities:
+                                        if a.name:
+                                            activity_names.append(a.name)
+                                    activity_str = ", ".join(activity_names) if activity_names else "none"
+                                    top_role = m.top_role.mention if len(m.roles) > 1 else "none"
+                                    context_extra += f"\n\n[Profile for {m.display_name} (@{m.name}): created={created}, joined={joined}, status={status_str}, activity={activity_str}, top_role={top_role}, roles={roles}]"
                         if file_extra:
                             context_extra += f"\n\n{file_extra}"
 
