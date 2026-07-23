@@ -1923,7 +1923,12 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
 
         if action == "create" and len(args) >= 2 and args[0].lower() == "channel":
             name = args[1]
-            channel_type = args[2] if len(args) > 2 else "text"
+            if len(args) > 2:
+                channel_type = args[2]
+            elif any(w in name.lower() for w in ["voice", "vc"]):
+                channel_type = "voice"
+            else:
+                channel_type = "text"
             return await _action_create_channel(message, name, channel_type)
 
         if action == "delete" and len(args) >= 2 and args[0].lower() == "channel":
@@ -2931,7 +2936,7 @@ async def on_message(message):
                         if any(kw in content_lower for kw in admin_keywords):
                             hint = ""
                             if any(w in content_lower for w in ["create", "make", "new", "add"]):
-                                hint = "\n[To create: use ACTION: create channel #name text  |  ACTION: create channel #name voice  |  ACTION: create channel #name category]"
+                                hint = "\n[To create: ACTION: create channel name (defaults to text)  |  To force type: write 'voice' or 'category' in the name, e.g. 'support-voice' or add type: ACTION: create channel name voice]"
                             context_extra += f"\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]{hint}"
 
                         if any(w in content_lower for w in ["mute", "deafen"]) and any(w in content_lower for w in ["voice", "vc"]):
