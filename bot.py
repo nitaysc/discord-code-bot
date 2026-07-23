@@ -11,7 +11,12 @@ import time
 import traceback
 from collections import deque
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+
+SUPPORTED_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
+def _is_supported_image_url(url: str) -> bool:
+    ext = os.path.splitext(urlparse(url).path.lower())[1]
+    return ext in SUPPORTED_IMAGE_EXTS or not ext
 
 import aiohttp
 import discord
@@ -2554,8 +2559,11 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
         messages.extend(history)
 
     if image_urls:
+        valid_urls = [url for url in image_urls if _is_supported_image_url(url)]
+        if not valid_urls:
+            print(f"[VISION] all {len(image_urls)} image URLs filtered out (unsupported formats)")
         content_parts = [{"type": "text", "text": prompt}]
-        for url in image_urls:
+        for url in valid_urls:
             content_parts.append({
                 "type": "image_url",
                 "image_url": {"url": url},
@@ -3021,7 +3029,7 @@ async def on_message(message):
         image_urls = []
         file_contexts = []
         for att in message.attachments:
-            if att.content_type and att.content_type.startswith("image/"):
+            if att.content_type and att.content_type.startswith("image/") and _is_supported_image_url(att.url):
                 image_urls.append(att.url)
             else:
                 file_data = await read_attachment(att)
@@ -3032,18 +3040,17 @@ async def on_message(message):
         # Extract image/GIF URLs from message content (Tenor, Giphy, direct links, etc.)
         image_ext_re = re.compile(r'(https?://\S+\.(?:gif|png|jpe?g|webp|bmp)(?:\?\S*)?)', re.IGNORECASE)
         for url in image_ext_re.findall(content):
-            if url not in image_urls:
+            if url not in image_urls and _is_supported_image_url(url):
                 image_urls.append(url)
         # Check embeds for GIF/video URLs (Tenor/Giphy embeds)
         for embed in message.embeds:
             if embed.type in ("gifv", "image", "video"):
                 for src in (embed.url, embed.thumbnail.url if embed.thumbnail else None, embed.image.url if embed.image else None, embed.video.url if embed.video else None):
-                    if src and src not in image_urls:
+                    if src and src not in image_urls and _is_supported_image_url(src):
                         image_urls.append(src)
             if embed.type == "rich" and embed.url:
-                # Tenor/Giphy often embed as rich with a thumbnail
                 thumb_url = embed.thumbnail.url if embed.thumbnail else None
-                if thumb_url and thumb_url not in image_urls:
+                if thumb_url and thumb_url not in image_urls and _is_supported_image_url(thumb_url):
                     image_urls.append(thumb_url)
 
         # Fetch webpage content from URLs in message
