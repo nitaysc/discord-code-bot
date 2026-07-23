@@ -2649,7 +2649,7 @@ bot = CodeBot()
 _channel_locks: dict[int, asyncio.Lock] = {}
 
 
-async def _per_channel_lock(channel_id: int):
+def _get_channel_lock(channel_id: int) -> asyncio.Lock:
     if channel_id not in _channel_locks:
         _channel_locks[channel_id] = asyncio.Lock()
     return _channel_locks[channel_id]
@@ -2705,7 +2705,7 @@ async def on_message(message):
             history_entry += f" [attached {len(file_contexts)} file(s)]"
         add_to_history(channel_id, "user", history_entry)
 
-        async with _per_channel_lock(message.channel.id):
+        async with _get_channel_lock(message.channel.id):
             async with message.channel.typing():
                 try:
                     file_extra = "\n\n".join(file_contexts)
