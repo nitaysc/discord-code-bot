@@ -2615,8 +2615,10 @@ def _rate_limit():
 
 def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
               temperature: float = 0.5, max_tokens: int = 4096,
-              image_urls: list[str] | None = None) -> str:
-    _rate_limit()
+              image_urls: list[str] | None = None,
+              skip_rate_limit: bool = False) -> str:
+    if not skip_rate_limit:
+        _rate_limit()
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     messages = [{"role": "system", "content": f"{system}\nCurrent UTC time: {now} UTC."}]
     if history:
@@ -2690,10 +2692,12 @@ AI_TIMEOUT = 45
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
                   temperature: float = 0.5, max_tokens: int = 4096,
-                  image_urls: list[str] | None = None) -> str:
+                  image_urls: list[str] | None = None,
+                  skip_rate_limit: bool = False) -> str:
+    timeout = 30 if skip_rate_limit else AI_TIMEOUT
     return await asyncio.wait_for(
-        asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls),
-        timeout=AI_TIMEOUT,
+        asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls, skip_rate_limit),
+        timeout=timeout,
     )
 
 
@@ -3044,6 +3048,9 @@ _voice_text_channels: dict[int, int] = {}  # guild_id -> text_channel_id for spe
 _voice_recv_active: dict[int, bool] = {}  # guild_id -> whether voice recv is currently active
 _voice_recv_locks: dict[int, asyncio.Lock] = {}  # guild_id -> lock for serializing speech processing
 _voice_tts_lang: dict[int, str] = {}  # guild_id -> "he" or "en"
+_tts_queues: dict[int, asyncio.Queue] = {}  # guild_id -> queue of (text, voice) tuples
+_tts_queue_workers: dict[int, asyncio.Task] = {}  # guild_id -> background TTS worker task
+_voice_last_speech: dict[int, dict[int, float]] = {}  # guild_id -> {user_id: timestamp} for debounce
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -4342,30 +4349,54 @@ def _get_tts_voice(guild_id: int | None, text: str) -> str:
         return "he-IL-HilaNeural"
     return "en-US-JennyNeural"
 
+async def _tts_queue_worker(guild_id: int):
+    """Background task: play TTS from queue sequentially."""
+    queue = _tts_queues.get(guild_id)
+    if not queue:
+        return
+    while True:
+        try:
+            item = await queue.get()
+            if item is None:
+                break
+            text, voice = item
+            guild = bot.get_guild(guild_id)
+            if not guild or not guild.voice_client or not guild.voice_client.is_connected():
+                continue
+            vc = guild.voice_client
+            import edge_tts
+            communicate = edge_tts.Communicate(text[:2000], voice)
+            with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+                tmp_path = f.name
+            await communicate.save(tmp_path)
+            source = discord.FFmpegPCMAudio(tmp_path, before_options="-loglevel warning")
+            done = asyncio.get_running_loop().create_future()
+            def _cleanup(e):
+                try:
+                    os.unlink(tmp_path)
+                except Exception:
+                    pass
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.call_soon_threadsafe(lambda: done.set_result(None))
+                except Exception:
+                    pass
+            vc.play(source, after=_cleanup)
+            await asyncio.wait_for(done, timeout=None)
+        except Exception as e:
+            print(f"[TTS WORKER] error: {e}")
+
 async def _speak_in_voice(guild: discord.Guild, text: str, voice: str | None = None):
-    """TTS using edge-tts, played through the guild's voice client."""
-    vc = guild.voice_client
-    if not vc or not vc.is_connected():
+    """Queue TTS for playback (sequential per guild, avoids 'Already playing audio')."""
+    if not guild.voice_client or not guild.voice_client.is_connected():
         return False
-    try:
-        import edge_tts
-        if voice is None:
-            voice = _get_tts_voice(guild.id, text)
-        communicate = edge_tts.Communicate(text[:2000], voice)
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            tmp_path = f.name
-        await communicate.save(tmp_path)
-        source = discord.FFmpegPCMAudio(tmp_path, before_options="-loglevel warning")
-        def _cleanup(e):
-            try:
-                os.unlink(tmp_path)
-            except Exception:
-                pass
-        vc.play(source, after=_cleanup)
-        return True
-    except Exception as e:
-        print(f"[TTS] error: {e}")
-        return False
+    if voice is None:
+        voice = _get_tts_voice(guild.id, text)
+    queue = _tts_queues.setdefault(guild.id, asyncio.Queue())
+    if guild.id not in _tts_queue_workers or _tts_queue_workers[guild.id].done():
+        _tts_queue_workers[guild.id] = asyncio.create_task(_tts_queue_worker(guild.id))
+    await queue.put((text[:2000], voice))
+    return True
 
 
 @bot.tree.command(name="vjoin", description="Join your voice channel to talk with Null via voice")
@@ -4438,8 +4469,15 @@ async def slash_vvoice(interaction: discord.Interaction, language: str):
         await interaction.response.send_message(f":x: Use `hebrew` or `english`", ephemeral=True)
 
 
+_VOICE_FILLER = re.compile(r'^(אה|הא|א|אוקיי|כן|לא|יא|יאללה|נו|טוב|וואי|די|סתום|סתמו|רגע|hello|hey|hi|yeah|no|ok|okay|uh|um|ah|oh|huh|מה|למה|איך)$', re.IGNORECASE)
+
 async def _handle_voice_speech(guild_id: int, user, text: str, loop):
     """Called when speech is recognized. Processes through AI and speaks response."""
+    text = text.strip()
+    if len(text) < 4:
+        return
+    if _VOICE_FILLER.match(text):
+        return
     guild = bot.get_guild(guild_id)
     if not guild or not guild.voice_client:
         return
@@ -4451,13 +4489,22 @@ async def _handle_voice_speech(guild_id: int, user, text: str, loop):
     channel = guild.get_channel(channel_id)
     if not channel:
         return
+    user_id = getattr(user, 'id', 0)
+    if not user_id:
+        return
+    now = time.time()
+    last_times = _voice_last_speech.setdefault(guild_id, {})
+    last = last_times.get(user_id, 0)
+    if now - last < 3:
+        return
+    last_times[user_id] = now
     print(f"[VOICE SPEECH] {user.display_name if hasattr(user, 'display_name') else user}: {text}")
     history_entry = f"{user.display_name if hasattr(user, 'display_name') else 'Someone'} (voice): {text}"
     add_to_history(channel_id, "user", history_entry)
     history = get_history(channel_id)
     try:
         _voice_recv_active[guild_id] = False
-        answer = await call_ai(CHAT_SYSTEM, text, history, temperature=0.7)
+        answer = await call_ai(CHAT_SYSTEM, text, history, temperature=0.7, max_tokens=1024, skip_rate_limit=True)
         add_to_history(channel_id, "assistant", answer)
         visible = "\n".join(line for line in answer.split("\n") if not line.strip().startswith("ACTION:"))
         if visible:
@@ -4469,7 +4516,7 @@ async def _handle_voice_speech(guild_id: int, user, text: str, loop):
             tts_text = re.sub(r'<[^>]+>', '', visible)
             tts_text = re.sub(r'https?://\S+', '', tts_text).strip()[:2000]
             if tts_text:
-                await _speak_in_voice(guild, tts_text)
+                asyncio.create_task(_speak_in_voice(guild, tts_text))
     except Exception as e:
         import traceback
         print(f"[VOICE SPEECH] Error: {e}")
@@ -4484,6 +4531,19 @@ async def slash_vleave(interaction: discord.Interaction):
     if vc:
         _voice_recv_active.pop(interaction.guild_id, None)
         _voice_text_channels.pop(interaction.guild_id, None)
+        _voice_recv_locks.pop(interaction.guild_id, None)
+        _voice_tts_lang.pop(interaction.guild_id, None)
+        _voice_last_speech.pop(interaction.guild_id, None)
+        worker = _tts_queue_workers.pop(interaction.guild_id, None)
+        if worker:
+            worker.cancel()
+        q = _tts_queues.pop(interaction.guild_id, None)
+        if q:
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
         vc.stop()
         await vc.disconnect()
         await interaction.response.send_message(":mute: Left voice channel.")
@@ -4538,6 +4598,17 @@ async def slash_stopradio(interaction: discord.Interaction):
         _voice_text_channels.pop(interaction.guild_id, None)
         _voice_recv_locks.pop(interaction.guild_id, None)
         _voice_tts_lang.pop(interaction.guild_id, None)
+        _voice_last_speech.pop(interaction.guild_id, None)
+        worker = _tts_queue_workers.pop(interaction.guild_id, None)
+        if worker:
+            worker.cancel()
+        q = _tts_queues.pop(interaction.guild_id, None)
+        if q:
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
         vc.stop()
         await vc.disconnect()
     await interaction.response.send_message(":stop_button: Stopped.")
