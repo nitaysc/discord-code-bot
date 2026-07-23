@@ -3231,21 +3231,12 @@ class CodeBot(commands.Bot):
             return
         self._synced_once = True
         commands = self.tree.get_commands()
-        print(f"[SYNC] {len(commands)} global slash commands defined")
-        for guild in self.guilds:
-            try:
-                self.tree.clear_commands(guild=guild)
-                self.tree.copy_global_to(guild=guild)
-                synced = await self.tree.sync(guild=guild)
-                print(f"[SYNC] Synced {len(synced)} commands to guild: {guild.name}")
-            except Exception as e:
-                print(f"Failed to sync to {guild.name}: {e}")
+        print(f"[SYNC] {len(commands)} global slash commands")
         try:
-            self.tree.clear_commands(guild=None)
             await self.tree.sync()
-            print("Cleared global commands to avoid duplicates")
+            print("[SYNC] Global commands synced")
         except Exception as e:
-            print(f"Failed to clear global commands: {e}")
+            print(f"[SYNC] Error: {e}")
 
     async def on_wavelink_node_ready(self, payload: wavelink.NodeReadyEventPayload):
         print(f"Lavalink node ready: {payload.node.uri}")
