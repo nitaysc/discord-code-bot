@@ -2679,29 +2679,39 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
 
         use_model = provider["vision_model"] if image_urls else provider["text_model"]
 
-        try:
-            response = provider["client"].chat.completions.create(
-                model=use_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
-                if name in _PROVIDER_USAGE:
-                    _PROVIDER_USAGE[name] += 1
-                raw = response.choices[0].message.content
-                cleaned = _clean_response(raw)
-                if cleaned:
-                    return cleaned
-                print(f"[PROVIDER] {name}: response was all garbage, falling through")
-                continue
-            return ""
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
-                print(f"[PROVIDER] {name} rate-limited on {use_model}, skipping: {e}")
-            else:
+        for attempt in range(2):
+            try:
+                response = provider["client"].chat.completions.create(
+                    model=use_model,
+                    messages=messages,
+                    temperature=temperature if attempt == 0 else 0.3,
+                    max_tokens=max_tokens,
+                )
+                if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
+                    if name in _PROVIDER_USAGE:
+                        _PROVIDER_USAGE[name] += 1
+                    raw = response.choices[0].message.content
+                    cleaned = _clean_response(raw)
+                    if cleaned:
+                        return cleaned
+                    if attempt == 0:
+                        print(f"[PROVIDER] {name}: garbage response, retrying with stripped context")
+                        messages = [{"role": "system", "content": f"{system}\nCurrent UTC time: {now} UTC."}, {"role": "user", "content": prompt}]
+                        continue
+                    print(f"[PROVIDER] {name}: still garbage after retry, falling through")
+                    break
+                return ""
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
+                    print(f"[PROVIDER] {name} rate-limited on {use_model}, skipping: {e}")
+                    break
                 print(f"[PROVIDER] {name} error on {use_model}: {e}")
+                if attempt == 0:
+                    print(f"[PROVIDER] {name}: retrying without history")
+                    messages = [{"role": "system", "content": f"{system}\nCurrent UTC time: {now} UTC."}, {"role": "user", "content": prompt}]
+                    continue
+                break
 
     raise RuntimeError(f"All {len(_PROVIDERS)} providers exhausted")
 
