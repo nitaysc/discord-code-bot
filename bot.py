@@ -2822,10 +2822,12 @@ async def on_message(message):
     is_dm = isinstance(message.channel, discord.DMChannel)
 
     is_reply_to_bot = False
+    replied_content = None
     if bot.user is not None and message.reference and message.reference.message_id:
         try:
             ref_msg = await message.channel.fetch_message(message.reference.message_id)
             is_reply_to_bot = ref_msg.author.id == bot.user.id
+            replied_content = f"[Replying to {ref_msg.author.display_name}: {ref_msg.content}]"
         except Exception:
             is_reply_to_bot = False
 
@@ -2898,6 +2900,9 @@ async def on_message(message):
                                 await message.reply(f":x: Could not read that channel: {e}")
                                 return
 
+                        if replied_content:
+                            context_extra += f"\n\n{replied_content}"
+
                         if message.guild:
                             has_other_mentions = any(
                                 m.id != bot.user.id for m in message.mentions
@@ -2907,6 +2912,18 @@ async def on_message(message):
                                 voice_info = get_voice_info(message.guild)
                                 server_info = get_server_info(message.guild)
                                 context_extra = f"\n\n[Server info:\n{server_info}]\n\n[Voice channels:\n{voice_info}]"
+                            # Profile lookup when someone asks about a user
+                            profile_keywords = ["profile", "who is", "about", "info on", "look up", "lookup"]
+                            if has_other_mentions and any(w in content_lower for w in profile_keywords):
+                                for m in message.mentions:
+                                    if m.id == bot.user.id:
+                                        continue
+                                    created = m.created_at.strftime("%Y-%m-%d")
+                                    joined = m.joined_at.strftime("%Y-%m-%d") if hasattr(m, 'joined_at') and m.joined_at else "unknown"
+                                    roles = ", ".join(r.mention for r in m.roles[1:]) if len(m.roles) > 1 else "none"
+                                    status = str(m.status) if hasattr(m, 'status') else "unknown"
+                                    activity = f"{m.activity.name}" if m.activity else "none"
+                                    context_extra += f"\n\n[Profile for {m.display_name} (@{m.name}): created={created}, joined={joined}, status={status}, activity={activity}, roles={roles}]"
                         if file_extra:
                             context_extra += f"\n\n{file_extra}"
 
