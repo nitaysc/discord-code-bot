@@ -2889,6 +2889,23 @@ async def on_message(message):
                     filename, file_text = file_data
                     file_contexts.append(f"[Attached file `{filename}`:\n```\n{file_text}\n```]")
 
+        # Extract image/GIF URLs from message content (Tenor, Giphy, direct links, etc.)
+        image_ext_re = re.compile(r'(https?://\S+\.(?:gif|png|jpe?g|webp|bmp)(?:\?\S*)?)', re.IGNORECASE)
+        for url in image_ext_re.findall(content):
+            if url not in image_urls:
+                image_urls.append(url)
+        # Check embeds for GIF/video URLs (Tenor/Giphy embeds)
+        for embed in message.embeds:
+            if embed.type in ("gifv", "image", "video"):
+                for src in (embed.url, embed.thumbnail.url if embed.thumbnail else None, embed.image.url if embed.image else None, embed.video.url if embed.video else None):
+                    if src and src not in image_urls:
+                        image_urls.append(src)
+            if embed.type == "rich" and embed.url:
+                # Tenor/Giphy often embed as rich with a thumbnail
+                thumb_url = embed.thumbnail.url if embed.thumbnail else None
+                if thumb_url and thumb_url not in image_urls:
+                    image_urls.append(thumb_url)
+
         channel_id = message.channel.id
         if image_urls:
             _channel_image_cache[channel_id] = (image_urls, time.time())
