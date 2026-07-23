@@ -32,50 +32,61 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 FREETHEAI_KEY = os.getenv("FREETHEAI_API_KEY")
 HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
-AI_KEY = FREETHEAI_KEY or OPENROUTER_KEY or GITHUB_TOKEN or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
-if not TOKEN or not AI_KEY:
-    raise RuntimeError("Missing DISCORD_TOKEN or AI API key in .env file")
+if not TOKEN:
+    raise RuntimeError("Missing DISCORD_TOKEN in .env file")
 
+# Provider configs — tried in priority order, skips capped ones
+_PROVIDERS = []
+_PROVIDER_DAILY_LIMITS = {}
+_PROVIDER_USAGE = {}
+_PROVIDER_RESET_DATE = {}
+
+
+def _register_provider(name, base_url, api_key, text_model, vision_model, daily_limit=None):
+    _PROVIDERS.append({
+        "name": name,
+        "client": OpenAI(base_url=base_url, api_key=api_key),
+        "text_model": text_model,
+        "vision_model": vision_model,
+        "daily_limit": daily_limit,
+    })
+    if daily_limit:
+        _PROVIDER_DAILY_LIMITS[name] = daily_limit
+        _PROVIDER_USAGE[name] = 0
+        _PROVIDER_RESET_DATE[name] = datetime.now(timezone.utc).date()
+
+
+if GITHUB_TOKEN:
+    _register_provider("GitHub", "https://models.inference.ai.azure.com", GITHUB_TOKEN, "gpt-4o-mini", "gpt-4o-mini", 150)
 if FREETHEAI_KEY:
-    client = OpenAI(
-        base_url="https://api.freetheai.xyz/v1",
-        api_key=FREETHEAI_KEY,
-    )
-elif OPENROUTER_KEY:
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_KEY,
-    )
-elif GITHUB_TOKEN:
-    client = OpenAI(
-        base_url="https://models.inference.ai.azure.com",
-        api_key=GITHUB_TOKEN,
-    )
-elif HF_TOKEN:
-    client = OpenAI(
-        base_url="https://router.huggingface.co/v1",
-        api_key=HF_TOKEN,
-    )
-elif CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
-    client = OpenAI(
-        base_url=f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT}/ai/v1/",
-        api_key=CLOUDFLARE_KEY,
-    )
-elif os.getenv("OPENAI_API_KEY"):
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-else:
-    client = OpenAI(
-        base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=os.getenv("GEMINI_API_KEY"),
-    )
+    _register_provider("FreeTheAi", "https://api.freetheai.xyz/v1", FREETHEAI_KEY, "opc/deepseek-v4-flash-free", "kai/openrouter/free", 250)
+if OPENROUTER_KEY:
+    _register_provider("OpenRouter", "https://openrouter.ai/api/v1", OPENROUTER_KEY, "openrouter/free", "openrouter/free")
+if HF_TOKEN:
+    _register_provider("HuggingFace", "https://router.huggingface.co/v1", HF_TOKEN, "microsoft/phi-4", "microsoft/phi-4")
+if CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
+    _register_provider("Cloudflare", f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT}/ai/v1/", CLOUDFLARE_KEY, "@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.1-8b-instruct")
+if os.getenv("OPENAI_API_KEY"):
+    _register_provider("OpenAI", "https://api.openai.com/v1", os.getenv("OPENAI_API_KEY"), "gpt-4o-mini", "gpt-4o-mini")
+elif os.getenv("GEMINI_API_KEY"):
+    _register_provider("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", os.getenv("GEMINI_API_KEY"), "gemini-2.0-flash", "gemini-2.0-flash")
 
-MODEL = os.getenv("AI_MODEL", "opc/deepseek-v4-flash-free" if FREETHEAI_KEY else "openrouter/free")
-VISION_MODEL = os.getenv("VISION_MODEL", "kai/openrouter/free")
-if MODEL.startswith("AI_MODEL="):
-    MODEL = MODEL[len("AI_MODEL="):]
+if not _PROVIDERS:
+    raise RuntimeError("No AI API keys found — set at least one of: GITHUB_TOKEN, FREETHEAI_API_KEY, OPENROUTER_API_KEY, HF_TOKEN, etc.")
 
-print(f"[STARTUP] AI provider: {'FreeTheAi' if FREETHEAI_KEY else 'Unknown'}, text model: {MODEL}, vision model: {VISION_MODEL}")
+# Apply env var overrides to highest-priority provider
+env_model = os.getenv("AI_MODEL")
+env_vision = os.getenv("VISION_MODEL")
+if env_model:
+    _PROVIDERS[0]["text_model"] = env_model
+if env_vision:
+    _PROVIDERS[0]["vision_model"] = env_vision
+
+provider_names = [p["name"] for p in _PROVIDERS]
+names_with_limits = [f"{p['name']}({_PROVIDER_DAILY_LIMITS.get(p['name'], 'unlimited')}/day)" for p in _PROVIDERS]
+print(f"[STARTUP] AI providers (priority): {' -> '.join(provider_names)}")
+print(f"[STARTUP] Provider limits: {', '.join(names_with_limits)}")
 print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
 
 
@@ -2359,7 +2370,6 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     if history:
         messages.extend(history)
 
-    use_model = VISION_MODEL if image_urls else MODEL
     if image_urls:
         content_parts = [{"type": "text", "text": prompt}]
         for url in image_urls:
@@ -2371,26 +2381,45 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     else:
         messages.append({"role": "user", "content": prompt})
 
-    for attempt in range(6):
-        try:
-            response = client.chat.completions.create(
-                model=use_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
-                return response.choices[0].message.content
-            return ""
-        except Exception as e:
-            err_str = str(e)
-            if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
-                wait = (2 ** attempt) + random.uniform(0, 2)
-                print(f"[RETRY] AI call rate-limited (attempt {attempt+1}/6), waiting {wait:.1f}s: {e}")
-                time.sleep(wait)
-            else:
-                raise
-    raise RuntimeError("AI call failed after 6 retries due to rate limits")
+    today = datetime.now(timezone.utc).date()
+
+    for provider in _PROVIDERS:
+        name = provider["name"]
+        if name in _PROVIDER_RESET_DATE and _PROVIDER_RESET_DATE[name] != today:
+            _PROVIDER_USAGE[name] = 0
+            _PROVIDER_RESET_DATE[name] = today
+
+        limit = _PROVIDER_DAILY_LIMITS.get(name)
+        if limit and _PROVIDER_USAGE.get(name, 0) >= limit:
+            print(f"[PROVIDER] {name} at daily limit ({_PROVIDER_USAGE.get(name, 0)}/{limit}), skipping")
+            continue
+
+        use_model = provider["vision_model"] if image_urls else provider["text_model"]
+
+        for attempt in range(6):
+            try:
+                response = provider["client"].chat.completions.create(
+                    model=use_model,
+                    messages=messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
+                    if name in _PROVIDER_USAGE:
+                        _PROVIDER_USAGE[name] += 1
+                    return response.choices[0].message.content
+                return ""
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
+                    wait = (2 ** attempt) + random.uniform(0, 2)
+                    print(f"[RETRY] {name} rate-limited on {use_model} (attempt {attempt+1}/6), waiting {wait:.1f}s: {e}")
+                    time.sleep(wait)
+                else:
+                    print(f"[PROVIDER] {name} error on {use_model}: {e}")
+                    break
+
+    raise RuntimeError(f"All {len(_PROVIDERS)} providers exhausted")
 
 
 AI_TIMEOUT = 45
