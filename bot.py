@@ -2601,24 +2601,10 @@ async def send_raw_file(channel, content: str, file_type: str | None):
 
 
 _last_ai_call = 0.0
-_ai_rate_lock = threading.Lock()
-
-
-def _rate_limit():
-    global _last_ai_call
-    with _ai_rate_lock:
-        elapsed = time.time() - _last_ai_call
-        if elapsed < 1.5:
-            time.sleep(1.5 - elapsed)
-        _last_ai_call = time.time()
-
-
 def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
               temperature: float = 0.5, max_tokens: int = 4096,
               image_urls: list[str] | None = None,
               skip_rate_limit: bool = False) -> str:
-    if not skip_rate_limit:
-        _rate_limit()
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     messages = [{"role": "system", "content": f"{system}\nCurrent UTC time: {now} UTC."}]
     if history:
@@ -2658,36 +2644,29 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
 
         use_model = provider["vision_model"] if image_urls else provider["text_model"]
 
-        for attempt in range(6):
-            try:
-                response = provider["client"].chat.completions.create(
-                    model=use_model,
-                    messages=messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                )
-                if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
-                    if name in _PROVIDER_USAGE:
-                        _PROVIDER_USAGE[name] += 1
-                    return response.choices[0].message.content
-                return ""
-            except Exception as e:
-                err_str = str(e)
-                if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
-                    if "per 86400s" in err_str or "per 24h" in err_str or "daily" in err_str.lower():
-                        print(f"[PROVIDER] {name} daily rate limit hit on {use_model}, skipping: {e}")
-                        break
-                    wait = (2 ** attempt) + random.uniform(0, 2)
-                    print(f"[RETRY] {name} rate-limited on {use_model} (attempt {attempt+1}/6), waiting {wait:.1f}s: {e}")
-                    time.sleep(wait)
-                else:
-                    print(f"[PROVIDER] {name} error on {use_model}: {e}")
-                    break
+        try:
+            response = provider["client"].chat.completions.create(
+                model=use_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
+                if name in _PROVIDER_USAGE:
+                    _PROVIDER_USAGE[name] += 1
+                return response.choices[0].message.content
+            return ""
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
+                print(f"[PROVIDER] {name} rate-limited on {use_model}, skipping: {e}")
+            else:
+                print(f"[PROVIDER] {name} error on {use_model}: {e}")
 
     raise RuntimeError(f"All {len(_PROVIDERS)} providers exhausted")
 
 
-AI_TIMEOUT = 45
+AI_TIMEOUT = 20
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
