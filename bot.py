@@ -3233,15 +3233,13 @@ async def on_message(message):
             try:
                 num = int(content)
             except ValueError:
-                await message.delete()
-                await message.channel.send(f"{message.author.mention} That's not a number! Count restarts from **0**.", delete_after=3)
+                await message.add_reaction("\u274c")
                 conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, ?, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0", (message.guild.id, highest))
                 conn.commit()
                 conn.close()
                 return
             if message.author.id == last_user:
-                await message.delete()
-                await message.channel.send(f"{message.author.mention} You can't count twice in a row!", delete_after=3)
+                await message.add_reaction("\u274c")
                 conn.close()
                 return
             if num == current + 1:
@@ -3251,16 +3249,14 @@ async def on_message(message):
                              (message.guild.id, new_count, new_highest, message.author.id, new_count, new_highest, message.author.id))
                 conn.commit()
                 conn.close()
+                await message.add_reaction("\u2705")
                 if new_count % 100 == 0:
                     await message.channel.send(f"\U0001f389 **{new_count}**! Amazing milestone!")
                 elif new_count % 50 == 0:
                     await message.channel.send(f"\U0001f525 **{new_count}**! Halfway there!")
-                elif new_count % 10 == 0:
-                    await message.add_reaction("\U0001f44d")
                 return
             else:
-                await message.delete()
-                await message.channel.send(f"{message.author.mention} Expected **{current + 1}**, got **{num}**! Count restarts from **0**.", delete_after=4)
+                await message.add_reaction("\u274c")
                 conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, ?, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0", (message.guild.id, highest))
                 conn.commit()
                 conn.close()
