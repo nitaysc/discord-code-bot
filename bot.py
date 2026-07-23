@@ -2713,7 +2713,8 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
                     continue
                 break
 
-    raise RuntimeError(f"All {len(_PROVIDERS)} providers exhausted")
+    print(f"[PROVIDER] All {len(_PROVIDERS)} providers exhausted")
+    return "**All AI providers are currently rate-limited or down.** Try again in a bit."
 
 
 AI_TIMEOUT = 40
