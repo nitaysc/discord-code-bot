@@ -69,7 +69,7 @@ else:
         api_key=os.getenv("GEMINI_API_KEY"),
     )
 
-MODEL = os.getenv("AI_MODEL", "glm/glm-5.2" if FREETHEAI_KEY else "openrouter/free")
+MODEL = os.getenv("AI_MODEL", "opc/deepseek-v4-flash-free" if FREETHEAI_KEY else "openrouter/free")
 VISION_MODEL = os.getenv("VISION_MODEL", "kai/openrouter/free")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
@@ -2346,7 +2346,7 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     return ""
 
 
-AI_TIMEOUT = 90
+AI_TIMEOUT = 45
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
