@@ -901,70 +901,15 @@ CREATE TABLE IF NOT EXISTS welcome_dm_settings (
     enabled INTEGER DEFAULT 0,
     message TEXT DEFAULT 'Welcome to **{server}**! Check out the rules in #rules!'
 );
-CREATE TABLE IF NOT EXISTS ballsdex_countryballs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    country_code TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    rarity TEXT DEFAULT 'Common',
-    attack_base INTEGER DEFAULT 50,
-    defense_base INTEGER DEFAULT 50,
-    hp_base INTEGER DEFAULT 50,
-    speed_base INTEGER DEFAULT 50
+CREATE TABLE IF NOT EXISTS counting_settings (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT
 );
-CREATE TABLE IF NOT EXISTS ballsdex_instances (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id BIGINT NOT NULL,
-    guild_id BIGINT NOT NULL,
-    countryball_id INTEGER NOT NULL,
-    attack_iv INTEGER DEFAULT 0,
-    defense_iv INTEGER DEFAULT 0,
-    hp_iv INTEGER DEFAULT 0,
-    speed_iv INTEGER DEFAULT 0,
-    shiny INTEGER DEFAULT 0,
-    level INTEGER DEFAULT 1,
-    xp BIGINT DEFAULT 0,
-    favorite INTEGER DEFAULT 0,
-    caught_at REAL DEFAULT 0,
-    FOREIGN KEY (countryball_id) REFERENCES ballsdex_countryballs(id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_trades (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user1_id BIGINT NOT NULL,
-    user2_id BIGINT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    created_at REAL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS ballsdex_trade_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    trade_id INTEGER NOT NULL,
-    user_id BIGINT NOT NULL,
-    instance_id INTEGER NOT NULL,
-    FOREIGN KEY (trade_id) REFERENCES ballsdex_trades(id),
-    FOREIGN KEY (instance_id) REFERENCES ballsdex_instances(id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_economy (
-    user_id BIGINT NOT NULL,
-    guild_id BIGINT NOT NULL,
-    coins BIGINT DEFAULT 0,
-    PRIMARY KEY (user_id, guild_id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_spawn_settings (
-    guild_id BIGINT NOT NULL,
-    channel_id BIGINT NOT NULL,
-    spawn_enabled INTEGER DEFAULT 1,
-    spawn_interval INTEGER DEFAULT 30,
-    PRIMARY KEY (guild_id, channel_id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_spawned (
-    message_id BIGINT PRIMARY KEY,
-    guild_id BIGINT NOT NULL,
-    channel_id BIGINT NOT NULL,
-    countryball_id INTEGER NOT NULL,
-    shiny INTEGER DEFAULT 0,
-    caught INTEGER DEFAULT 0,
-    spawned_at REAL DEFAULT 0,
-    FOREIGN KEY (countryball_id) REFERENCES ballsdex_countryballs(id)
+CREATE TABLE IF NOT EXISTS counting_stats (
+    guild_id BIGINT PRIMARY KEY,
+    current_count BIGINT DEFAULT 0,
+    highest_count BIGINT DEFAULT 0,
+    last_user_id BIGINT DEFAULT 0
 );
 """
 SCHEMA_SCRIPT_POSTGRES = """
@@ -1096,66 +1041,15 @@ CREATE TABLE IF NOT EXISTS welcome_dm_settings (
     enabled INTEGER DEFAULT 0,
     message TEXT DEFAULT 'Welcome to **{server}**! Check out the rules in #rules!'
 );
-CREATE TABLE IF NOT EXISTS ballsdex_countryballs (
-    id SERIAL PRIMARY KEY,
-    name TEXT NOT NULL,
-    country_code TEXT NOT NULL,
-    emoji TEXT NOT NULL,
-    rarity TEXT DEFAULT 'Common',
-    attack_base INTEGER DEFAULT 50,
-    defense_base INTEGER DEFAULT 50,
-    hp_base INTEGER DEFAULT 50,
-    speed_base INTEGER DEFAULT 50
+CREATE TABLE IF NOT EXISTS counting_settings (
+    guild_id BIGINT PRIMARY KEY,
+    channel_id BIGINT
 );
-CREATE TABLE IF NOT EXISTS ballsdex_instances (
-    id SERIAL PRIMARY KEY,
-    user_id BIGINT NOT NULL,
-    guild_id BIGINT NOT NULL,
-    countryball_id INTEGER NOT NULL REFERENCES ballsdex_countryballs(id),
-    attack_iv INTEGER DEFAULT 0,
-    defense_iv INTEGER DEFAULT 0,
-    hp_iv INTEGER DEFAULT 0,
-    speed_iv INTEGER DEFAULT 0,
-    shiny INTEGER DEFAULT 0,
-    level INTEGER DEFAULT 1,
-    xp BIGINT DEFAULT 0,
-    favorite INTEGER DEFAULT 0,
-    caught_at REAL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS ballsdex_trades (
-    id SERIAL PRIMARY KEY,
-    user1_id BIGINT NOT NULL,
-    user2_id BIGINT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    created_at REAL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS ballsdex_trade_items (
-    id SERIAL PRIMARY KEY,
-    trade_id INTEGER NOT NULL REFERENCES ballsdex_trades(id),
-    user_id BIGINT NOT NULL,
-    instance_id INTEGER NOT NULL REFERENCES ballsdex_instances(id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_economy (
-    user_id BIGINT NOT NULL,
-    guild_id BIGINT NOT NULL,
-    coins BIGINT DEFAULT 0,
-    PRIMARY KEY (user_id, guild_id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_spawn_settings (
-    guild_id BIGINT NOT NULL,
-    channel_id BIGINT NOT NULL,
-    spawn_enabled INTEGER DEFAULT 1,
-    spawn_interval INTEGER DEFAULT 30,
-    PRIMARY KEY (guild_id, channel_id)
-);
-CREATE TABLE IF NOT EXISTS ballsdex_spawned (
-    message_id BIGINT PRIMARY KEY,
-    guild_id BIGINT NOT NULL,
-    channel_id BIGINT NOT NULL,
-    countryball_id INTEGER NOT NULL REFERENCES ballsdex_countryballs(id),
-    shiny INTEGER DEFAULT 0,
-    caught INTEGER DEFAULT 0,
-    spawned_at REAL DEFAULT 0
+CREATE TABLE IF NOT EXISTS counting_stats (
+    guild_id BIGINT PRIMARY KEY,
+    current_count BIGINT DEFAULT 0,
+    highest_count BIGINT DEFAULT 0,
+    last_user_id BIGINT DEFAULT 0
 );
 """
 
@@ -3322,6 +3216,56 @@ def _get_channel_lock(channel_id: int) -> asyncio.Lock:
 async def on_message(message):
     if message.author.bot:
         return
+
+    # ── Counting Game ──
+    if message.guild:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT channel_id FROM counting_settings WHERE guild_id = ?", (message.guild.id,))
+        row = cur.fetchone()
+        if row and row[0] == message.channel.id:
+            content = message.content.strip()
+            cur.execute("SELECT current_count, highest_count, last_user_id FROM counting_stats WHERE guild_id = ?", (message.guild.id,))
+            stats = cur.fetchone()
+            current = stats[0] if stats else 0
+            highest = stats[1] if stats else 0
+            last_user = stats[2] if stats else 0
+            try:
+                num = int(content)
+            except ValueError:
+                await message.delete()
+                await message.channel.send(f"{message.author.mention} That's not a number! Count restarts from **0**.", delete_after=3)
+                conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, ?, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0", (message.guild.id, highest))
+                conn.commit()
+                conn.close()
+                return
+            if message.author.id == last_user:
+                await message.delete()
+                await message.channel.send(f"{message.author.mention} You can't count twice in a row!", delete_after=3)
+                conn.close()
+                return
+            if num == current + 1:
+                new_count = num
+                new_highest = max(highest, new_count)
+                conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, ?, ?, ?) ON CONFLICT(guild_id) DO UPDATE SET current_count = ?, highest_count = ?, last_user_id = ?",
+                             (message.guild.id, new_count, new_highest, message.author.id, new_count, new_highest, message.author.id))
+                conn.commit()
+                conn.close()
+                if new_count % 100 == 0:
+                    await message.channel.send(f"\U0001f389 **{new_count}**! Amazing milestone!")
+                elif new_count % 50 == 0:
+                    await message.channel.send(f"\U0001f525 **{new_count}**! Halfway there!")
+                elif new_count % 10 == 0:
+                    await message.add_reaction("\U0001f44d")
+                return
+            else:
+                await message.delete()
+                await message.channel.send(f"{message.author.mention} Expected **{current + 1}**, got **{num}**! Count restarts from **0**.", delete_after=4)
+                conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, ?, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0", (message.guild.id, highest))
+                conn.commit()
+                conn.close()
+                return
+        conn.close()
 
     is_mention = bot.user is not None and (
         bot.user in message.mentions
@@ -6611,6 +6555,52 @@ async def autorole_list(interaction: discord.Interaction):
 
 
 bot.tree.add_command(_autorole_group)
+
+# =============================================================================
+# Counting Game
+# =============================================================================
+
+_counting_group = app_commands.Group(name="counting", description="Counting game — take turns counting up!", guild_only=True)
+
+
+@_counting_group.command(name="setup", description="Set the counting channel")
+@app_commands.describe(channel="Channel for counting")
+async def counting_setup(interaction: discord.Interaction, channel: discord.TextChannel):
+    conn = get_db()
+    conn.execute("INSERT INTO counting_settings (guild_id, channel_id) VALUES (?, ?) ON CONFLICT(guild_id) DO UPDATE SET channel_id = ?",
+                 (interaction.guild_id, channel.id, channel.id))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(f"\U0001f522 Counting channel set to {channel.mention}!")
+
+
+@_counting_group.command(name="stats", description="Show counting stats for this server")
+async def counting_stats(interaction: discord.Interaction):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("SELECT current_count, highest_count FROM counting_stats WHERE guild_id = ?", (interaction.guild_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        await interaction.response.send_message(":information_source: No counting has happened yet! Use `/counting setup` first.")
+        return
+    embed = discord.Embed(title="\U0001f522 Counting Stats", color=0x2ecc71)
+    embed.add_field(name="Current Count", value=str(row[0]), inline=True)
+    embed.add_field(name="Highest Ever", value=str(row[1]), inline=True)
+    await interaction.response.send_message(embed=embed)
+
+
+@_counting_group.command(name="reset", description="Reset the count to 0 (Admin only)")
+async def counting_reset(interaction: discord.Interaction):
+    conn = get_db()
+    conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, 0, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0",
+                 (interaction.guild_id,))
+    conn.commit()
+    conn.close()
+    await interaction.response.send_message(":arrows_counterclockwise: Count reset to **0**. Highest score preserved.")
+
+
+bot.tree.add_command(_counting_group)
 
 
 bot.run(TOKEN)
