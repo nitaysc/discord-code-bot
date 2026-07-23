@@ -11,7 +11,7 @@ from discord import app_commands
 from PIL import Image, ImageDraw, ImageFont
 
 # ─── Countryball Data ───────────────────────────────────────────────
-# All 195+ countries with emoji flags, rarity tiers, and base stats
+# 230+ countries, historical empires, and territories with rarity tiers
 COUNTRY_DATA = [
     # Legendary (rarest)
     ("United States", "US", "\U0001f1fa\U0001f1f8", "Legendary", 80, 70, 85, 75),
@@ -200,6 +200,59 @@ COUNTRY_DATA = [
     ("Vanuatu", "VU", "\U0001f1fb\U0001f1fa", "Common", 35, 35, 40, 45),
     ("Vatican City", "VA", "\U0001f1fb\U0001f1e6", "Common", 20, 60, 30, 55),
     ("Zambia", "ZM", "\U0001f1ff\U0001f1f2", "Common", 50, 45, 55, 50),
+    # ── Historical Empires & Territories ──
+    ("Roman Empire", "ROME", "\u2694\ufe0f", "Legendary", 95, 90, 95, 80),
+    ("Ottoman Empire", "OTTO", "\u262e\ufe0f", "Legendary", 90, 85, 90, 75),
+    ("British Empire", "BRIE", "\U0001f1ec\U0001f1e7", "Legendary", 85, 90, 95, 90),
+    ("Soviet Union", "SOV", "\U0001f1f7\U0001f1fa", "Legendary", 95, 90, 90, 70),
+    ("Mongol Empire", "MONG", "\u262e\ufe0f", "Legendary", 100, 85, 80, 95),
+    ("Spanish Empire", "SPAE", "\U0001f1ea\U0001f1f8", "Legendary", 85, 80, 85, 85),
+    ("Holy Roman Empire", "HRE", "\U0001f1e9\U0001f1ea", "Legendary", 75, 95, 80, 65),
+    ("Ancient Egypt", "EGYT", "\u2604\ufe0f", "Legendary", 75, 85, 80, 60),
+    ("Persian Empire", "PER", "\U0001f1ee\U0001f1f7", "Legendary", 85, 80, 85, 80),
+    ("Macedonian Empire", "MAC", "\u2604\ufe0f", "Legendary", 95, 70, 75, 95),
+    ("Byzantine Empire", "BYZ", "\U0001f1ec\U0001f1f7", "Legendary", 80, 90, 80, 70),
+    ("Aztec Empire", "AZT", "\U0001f1f2\U0001f1fd", "Epic", 85, 75, 75, 70),
+    ("Inca Empire", "INCA", "\U0001f1f5\U0001f1ea", "Epic", 80, 80, 80, 65),
+    ("Prussian Empire", "PRU", "\U0001f1e9\U0001f1ea", "Epic", 90, 85, 75, 80),
+    ("Austrian Empire", "AUS", "\U0001f1e6\U0001f1f9", "Epic", 70, 85, 75, 70),
+    ("French Empire", "FRE", "\U0001f1eb\U0001f1f7", "Epic", 85, 75, 80, 85),
+    ("Dutch Empire", "DUT", "\U0001f1f3\U0001f1f1", "Epic", 75, 75, 75, 90),
+    ("Portuguese Empire", "POR", "\U0001f1f5\U0001f1f9", "Epic", 75, 75, 75, 85),
+    ("Swedish Empire", "SWE", "\U0001f1f8\U0001f1ea", "Epic", 80, 75, 70, 75),
+    ("Mughal Empire", "MUGH", "\U0001f1ee\U0001f1f3", "Epic", 85, 80, 85, 70),
+    ("Maurya Empire", "MAUR", "\U0001f1ee\U0001f1f3", "Epic", 80, 80, 85, 70),
+    ("Qing Dynasty", "QING", "\U0001f1e8\U0001f1f3", "Epic", 80, 80, 85, 65),
+    ("Japanese Empire", "JAP", "\U0001f1ef\U0001f1f5", "Epic", 90, 75, 75, 85),
+    ("Russian Empire", "RUS", "\U0001f1f7\U0001f1fa", "Epic", 80, 80, 85, 65),
+    ("German Empire", "GER", "\U0001f1e9\U0001f1ea", "Epic", 90, 80, 75, 80),
+    ("Carthaginian Empire", "CAR", "\u2694\ufe0f", "Epic", 80, 75, 70, 85),
+    ("Babylonian Empire", "BAB", "\u2604\ufe0f", "Rare", 75, 80, 70, 60),
+    ("Khmer Empire", "KHM", "\U0001f1f0\U0001f1ed", "Rare", 70, 70, 75, 70),
+    ("Mali Empire", "MALI", "\U0001f1f2\U0001f1f1", "Rare", 75, 65, 75, 65),
+    ("Songhai Empire", "SON", "\U0001f1f3\U0001f1ec", "Rare", 75, 65, 70, 65),
+    ("Yugoslavia", "YUGO", "\U0001f1f7\U0001f1f8", "Rare", 70, 65, 70, 70),
+    ("Czechoslovakia", "CZEC", "\U0001f1e8\U0001f1ff", "Rare", 65, 65, 65, 70),
+    ("East Germany", "GDR", "\U0001f1e9\U0001f1ea", "Rare", 70, 70, 65, 65),
+    ("Zanzibar", "ZAN", "\U0001f1f9\U0001f1ff", "Uncommon", 45, 45, 50, 55),
+    ("Texas Republic", "TEX", "\U0001f1fa\U0001f1f8", "Uncommon", 70, 60, 65, 75),
+    ("Hawaii", "HAW", "\U0001f1fa\U0001f1f8", "Uncommon", 40, 50, 45, 70),
+    ("Hong Kong", "HK", "\U0001f1ed\U0001f1f0", "Uncommon", 50, 70, 50, 90),
+    ("Puerto Rico", "PR", "\U0001f1f5\U0001f1f7", "Uncommon", 50, 55, 55, 70),
+    ("Greenland", "GL", "\U0001f1ec\U0001f1f1", "Uncommon", 30, 65, 40, 45),
+    ("Kosovo", "XK", "\U0001f1fd\U0001f1f0", "Uncommon", 55, 50, 55, 60),
+    ("Western Sahara", "EH", "\U0001f1ea\U0001f1ed", "Uncommon", 45, 45, 50, 55),
+    ("Tibet", "TIB", "\u262e\ufe0f", "Uncommon", 55, 60, 55, 50),
+    ("Catalonia", "CAT", "\U0001f1ea\U0001f1f8", "Common", 50, 50, 50, 65),
+    ("Scotland", "SCO", "\U0001f1ec\U0001f1e7", "Common", 55, 55, 55, 70),
+    ("Wales", "WAL", "\U0001f1ec\U0001f1e7", "Common", 50, 55, 50, 65),
+    ("Quebec", "QUE", "\U0001f1e8\U0001f1e6", "Common", 45, 50, 50, 60),
+    ("Siberia", "SIB", "\U0001f1f7\U0001f1fa", "Common", 55, 50, 55, 45),
+    ("Kurdistan", "KUR", "\U0001f1ee\U0001f1f6", "Common", 60, 55, 60, 60),
+    ("Bavaria", "BAV", "\U0001f1e9\U0001f1ea", "Common", 50, 55, 55, 60),
+    ("Sardinia", "SAR", "\U0001f1ee\U0001f1f9", "Common", 45, 50, 50, 60),
+    ("Sicily", "SIC", "\U0001f1ee\U0001f1f9", "Common", 50, 50, 50, 60),
+    ("Venice", "VEN", "\U0001f1ee\U0001f1f9", "Common", 45, 60, 45, 70),
 ]
 
 RARITY_ORDER = {"Common": 0, "Uncommon": 1, "Rare": 2, "Epic": 3, "Legendary": 4}
@@ -262,15 +315,30 @@ def _ensure_countryballs_sync():
     try:
         cur = conn.cursor()
         cur.execute("SELECT COUNT(*) FROM ballsdex_countryballs")
-        if cur.fetchone()[0] > 0:
+        existing = cur.fetchone()[0]
+        if existing >= len(COUNTRY_DATA):
             return
-        for name, code, emoji, rarity, atk, df, hp, spd in COUNTRY_DATA:
-            cur.execute(
-                "INSERT INTO ballsdex_countryballs (name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (name, code, emoji, rarity, atk, df, hp, spd),
-            )
-        conn.commit()
-        print(f"[BALLSDEX] Seeded {len(COUNTRY_DATA)} countryballs")
+        if existing == 0:
+            for name, code, emoji, rarity, atk, df, hp, spd in COUNTRY_DATA:
+                cur.execute(
+                    "INSERT INTO ballsdex_countryballs (name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, code, emoji, rarity, atk, df, hp, spd),
+                )
+            conn.commit()
+            print(f"[BALLSDEX] Seeded {len(COUNTRY_DATA)} countryballs")
+        else:
+            added = 0
+            for name, code, emoji, rarity, atk, df, hp, spd in COUNTRY_DATA:
+                cur.execute("SELECT id FROM ballsdex_countryballs WHERE name = ? OR country_code = ?", (name, code))
+                if not cur.fetchone():
+                    cur.execute(
+                        "INSERT INTO ballsdex_countryballs (name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        (name, code, emoji, rarity, atk, df, hp, spd),
+                    )
+                    added += 1
+            if added:
+                conn.commit()
+                print(f"[BALLSDEX] Added {added} new countryballs (was {existing}, now {existing + added})")
     finally:
         conn.close()
 
