@@ -28,19 +28,19 @@ CLOUDFLARE_ACCOUNT = os.getenv("CLOUDFLARE_ACCOUNT_ID")
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
+FREETHEAI_KEY = os.getenv("FREETHEAI_API_KEY")
 HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
-AI_KEY = OPENROUTER_KEY or GITHUB_TOKEN or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GROQ_API_KEY") or os.getenv("GEMINI_API_KEY")
-MODEL = os.getenv("AI_MODEL", os.getenv("GEMINI_MODEL", "openrouter/free"))
-if MODEL.startswith("AI_MODEL="):
-    MODEL = MODEL[len("AI_MODEL="):]
+AI_KEY = FREETHEAI_KEY or OPENROUTER_KEY or GITHUB_TOKEN or HF_TOKEN or CLOUDFLARE_KEY or os.getenv("OPENAI_API_KEY") or os.getenv("GEMINI_API_KEY")
 
 if not TOKEN or not AI_KEY:
     raise RuntimeError("Missing DISCORD_TOKEN or AI API key in .env file")
 
-print(f"[STARTUP] AI provider: {MODEL}")
-print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
-
-if OPENROUTER_KEY:
+if FREETHEAI_KEY:
+    client = OpenAI(
+        base_url="https://api.freetheai.xyz/v1",
+        api_key=FREETHEAI_KEY,
+    )
+elif OPENROUTER_KEY:
     client = OpenAI(
         base_url="https://openrouter.ai/api/v1",
         api_key=OPENROUTER_KEY,
@@ -61,17 +61,28 @@ elif CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
         api_key=CLOUDFLARE_KEY,
     )
 elif os.getenv("OPENAI_API_KEY"):
-    client = OpenAI(api_key=AI_KEY)
-elif os.getenv("GROQ_API_KEY"):
-    client = OpenAI(
-        base_url="https://api.groq.com/openai/v1",
-        api_key=AI_KEY,
-    )
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 else:
     client = OpenAI(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        api_key=AI_KEY,
+        api_key=os.getenv("GEMINI_API_KEY"),
     )
+
+_fallback_client = None
+_fallback_model = None
+if FREETHEAI_KEY and OPENROUTER_KEY:
+    _fallback_client = OpenAI(
+        base_url="https://openrouter.ai/api/v1",
+        api_key=OPENROUTER_KEY,
+    )
+    _fallback_model = "openrouter/free"
+
+MODEL = os.getenv("AI_MODEL", "vova/gemini-3.5-flash" if FREETHEAI_KEY else "openrouter/free")
+if MODEL.startswith("AI_MODEL="):
+    MODEL = MODEL[len("AI_MODEL="):]
+
+print(f"[STARTUP] AI provider: {'FreeTheAi (primary) + OpenRouter (fallback)' if _fallback_client else ('FreeTheAi' if FREETHEAI_KEY else MODEL)}")
+print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
 
 
 def _search_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
@@ -2315,12 +2326,24 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     else:
         messages.append({"role": "user", "content": prompt})
 
-    response = client.chat.completions.create(
-        model=MODEL,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    try:
+        response = client.chat.completions.create(
+            model=MODEL,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as e:
+        if _fallback_client:
+            print(f"[FALLBACK] Primary failed ({e}), using fallback")
+            response = _fallback_client.chat.completions.create(
+                model=_fallback_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        else:
+            raise
     return response.choices[0].message.content or ""
 
 
