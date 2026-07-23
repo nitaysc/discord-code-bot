@@ -257,21 +257,25 @@ class SimplePaginator(discord.ui.View):
         self.current = (self.current + 1) % len(self.pages)
         await interaction.response.edit_message(embed=self.pages[self.current])
 
-def _ensure_countryballs():
+def _ensure_countryballs_sync():
     conn = _db()
-    cur = conn.cursor()
-    cur.execute("SELECT COUNT(*) FROM ballsdex_countryballs")
-    if cur.fetchone()[0] > 0:
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM ballsdex_countryballs")
+        if cur.fetchone()[0] > 0:
+            return
+        for name, code, emoji, rarity, atk, df, hp, spd in COUNTRY_DATA:
+            cur.execute(
+                "INSERT INTO ballsdex_countryballs (name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (name, code, emoji, rarity, atk, df, hp, spd),
+            )
+        conn.commit()
+        print(f"[BALLSDEX] Seeded {len(COUNTRY_DATA)} countryballs")
+    finally:
         conn.close()
-        return
-    for name, code, emoji, rarity, atk, df, hp, spd in COUNTRY_DATA:
-        cur.execute(
-            "INSERT INTO ballsdex_countryballs (name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (name, code, emoji, rarity, atk, df, hp, spd),
-        )
-    conn.commit()
-    conn.close()
-    print(f"[BALLSDEX] Seeded {len(COUNTRY_DATA)} countryballs")
+
+async def _ensure_countryballs():
+    await asyncio.to_thread(_ensure_countryballs_sync)
 
 # ─── Spawn System ───────────────────────────────────────────────────
 
@@ -280,17 +284,20 @@ SPAWNED_MESSAGES: dict[int, dict] = {}
 async def spawn_ball(guild: discord.Guild, channel: discord.TextChannel):
     ensure_countryballs_called = getattr(spawn_ball, "_seeded", False)
     if not ensure_countryballs_called:
-        _ensure_countryballs()
+        await _ensure_countryballs()
         spawn_ball._seeded = True
 
-    conn = _db()
-    cur = conn.cursor()
+    def _fetch_balls():
+        conn = _db()
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT id, name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base FROM ballsdex_countryballs")
+            return cur.fetchall()
+        finally:
+            conn.close()
 
-    # Pick random countryball weighted by rarity
-    cur.execute("SELECT id, name, country_code, emoji, rarity, attack_base, defense_base, hp_base, speed_base FROM ballsdex_countryballs")
-    all_balls = cur.fetchall()
+    all_balls = await asyncio.to_thread(_fetch_balls)
     if not all_balls:
-        conn.close()
         return
     weights = [RARITY_WEIGHTS.get(b[4], 10) for b in all_balls]
     chosen = random.choices(all_balls, weights=weights, k=1)[0]
@@ -301,7 +308,6 @@ async def spawn_ball(guild: discord.Guild, channel: discord.TextChannel):
     def_iv = _roll_iv()
     hp_iv = _roll_iv()
     spd_iv = _roll_iv()
-    conn.close()
 
     embed = discord.Embed(
         title=f"A wild {b_name} appeared! {b_emoji}",
@@ -316,12 +322,15 @@ async def spawn_ball(guild: discord.Guild, channel: discord.TextChannel):
     msg = await channel.send(embed=embed, view=view)
     view.message = msg
 
-    # Track spawned ball in DB
-    conn2 = _db()
-    conn2.execute("INSERT OR REPLACE INTO ballsdex_spawned (message_id, guild_id, channel_id, countryball_id, shiny, caught, spawned_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
-                  (msg.id, guild.id, channel.id, b_id, shiny, time.time()))
-    conn2.commit()
-    conn2.close()
+    def _save_spawned():
+        conn = _db()
+        try:
+            conn.execute("INSERT OR REPLACE INTO ballsdex_spawned (message_id, guild_id, channel_id, countryball_id, shiny, caught, spawned_at) VALUES (?, ?, ?, ?, ?, 0, ?)",
+                          (msg.id, guild.id, channel.id, b_id, shiny, time.time()))
+            conn.commit()
+        finally:
+            conn.close()
+    await asyncio.to_thread(_save_spawned)
 
     key = f"{guild.id}:{channel.id}"
     if key not in SPAWNED_MESSAGES:
@@ -398,15 +407,24 @@ class CatchView(discord.ui.View):
 
 # ─── Admin / Spawn Loop ─────────────────────────────────────────────
 
+async def _db_async():
+    return await asyncio.to_thread(_db)
+
+async def _fetch_spawn_channels():
+    conn = await _db_async()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT guild_id, channel_id FROM ballsdex_spawn_settings WHERE spawn_enabled = 1")
+        rows = cur.fetchall()
+        return rows
+    finally:
+        await asyncio.to_thread(conn.close)
+
 async def ballsdex_spawn_loop(bot):
     await bot.wait_until_ready()
     while not bot.is_closed():
         try:
-            conn = _db()
-            cur = conn.cursor()
-            cur.execute("SELECT guild_id, channel_id FROM ballsdex_spawn_settings WHERE spawn_enabled = 1")
-            rows = cur.fetchall()
-            conn.close()
+            rows = await _fetch_spawn_channels()
             for guild_id, channel_id in rows:
                 guild = bot.get_guild(guild_id)
                 if not guild:
@@ -416,6 +434,8 @@ async def ballsdex_spawn_loop(bot):
                     continue
                 await spawn_ball(guild, channel)
                 await asyncio.sleep(30)
+            if not rows:
+                await asyncio.sleep(60)
         except Exception as e:
             print(f"[BALLSDEX] spawn loop error: {e}")
             await asyncio.sleep(60)
