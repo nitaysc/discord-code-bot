@@ -2315,6 +2315,7 @@ LANGUAGE RULES (IMPORTANT):
 - If they write in Hebrew (א-ת), respond in Hebrew. NEVER respond in Arabic (ا-ي) or any other language.
 - If they write in Arabic (ا-ي), respond in Arabic. NEVER respond in Hebrew.
 - If they write in English, respond in English.
+- Voice messages can also be in Hebrew or English — match the spoken language.
 - These two languages look similar but are completely different. Pay close attention to the script.
 - When in doubt, match the user's exact language character by character.
 
@@ -4303,13 +4304,20 @@ async def slash_undeafen(interaction: discord.Interaction, member: discord.Membe
     await interaction.response.send_message(result)
 
 
-async def _speak_in_voice(guild: discord.Guild, text: str, voice: str = "en-US-JennyNeural"):
+def _detect_tts_voice(text: str) -> str:
+    if re.search(r'[\u0590-\u05FF]', text):
+        return "he-IL-HilaNeural"
+    return "en-US-JennyNeural"
+
+async def _speak_in_voice(guild: discord.Guild, text: str, voice: str | None = None):
     """TTS using edge-tts, played through the guild's voice client."""
     vc = guild.voice_client
     if not vc or not vc.is_connected():
         return False
     try:
         import edge_tts
+        if voice is None:
+            voice = _detect_tts_voice(text)
         communicate = edge_tts.Communicate(text[:200], voice)
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             tmp_path = f.name
@@ -4372,15 +4380,17 @@ async def slash_vjoin(interaction: discord.Interaction):
     def make_process_cb():
         import speech_recognition as sr
         def process_cb(recognizer: sr.Recognizer, audio: sr.AudioData, user) -> str | None:
-            try:
-                text = recognizer.recognize_google(audio)
-                print(f"[VOICE RECV DEBUG] Google recognized: '{text}' from {user}")
-                return text
-            except sr.UnknownValueError:
-                return None
-            except sr.RequestError as e:
-                print(f"[VOICE RECV DEBUG] Google API error: {e}")
-                return None
+            for lang in ("he-IL", "en-US"):
+                try:
+                    text = recognizer.recognize_google(audio, language=lang)
+                    print(f"[VOICE RECV DEBUG] Google recognized ({lang}): '{text}' from {user}")
+                    return text
+                except sr.UnknownValueError:
+                    continue
+                except sr.RequestError as e:
+                    print(f"[VOICE RECV DEBUG] Google API error: {e}")
+                    return None
+            return None
         return process_cb
     try:
         sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=3)
