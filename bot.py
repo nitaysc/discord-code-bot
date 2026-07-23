@@ -2748,9 +2748,9 @@ async def on_message(message):
                         action_results = await execute_admin_actions(message, answer)
                         for result in action_results:
                             await message.channel.send(result)
-            except Exception as e:
-                await message.reply(f":x: Error: {e}", mention_author=False)
-        return
+                except Exception as e:
+                    await message.reply(f":x: Error: {e}", mention_author=False)
+            return
 
     if message.guild:
         role_ids = [r.id for r in message.author.roles]
