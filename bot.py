@@ -61,6 +61,8 @@ HF_TOKEN = os.getenv("HF_TOKEN")
 OPENROUTER_KEY = os.getenv("OPENROUTER_API_KEY")
 FREETHEAI_KEY = os.getenv("FREETHEAI_API_KEY")
 HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
+GROQ_KEY = os.getenv("GROQ_API_KEY")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
 if not TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN in .env file")
@@ -97,10 +99,12 @@ if HF_TOKEN:
     _register_provider("HuggingFace", "https://router.huggingface.co/v1", HF_TOKEN, "microsoft/phi-4", "microsoft/phi-4")
 if CLOUDFLARE_KEY and CLOUDFLARE_ACCOUNT:
     _register_provider("Cloudflare", f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT}/ai/v1/", CLOUDFLARE_KEY, "@cf/meta/llama-3.1-8b-instruct", "@cf/meta/llama-3.1-8b-instruct")
+if GROQ_KEY:
+    _register_provider("Groq", "https://api.groq.com/openai/v1", GROQ_KEY, "llama-3.3-70b-versatile", "llama-3.2-11b-vision-preview")
+if GEMINI_KEY:
+    _register_provider("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", GEMINI_KEY, "gemini-2.0-flash", "gemini-2.0-flash")
 if os.getenv("OPENAI_API_KEY"):
     _register_provider("OpenAI", "https://api.openai.com/v1", os.getenv("OPENAI_API_KEY"), "gpt-4o-mini", "gpt-4o-mini")
-elif os.getenv("GEMINI_API_KEY"):
-    _register_provider("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", os.getenv("GEMINI_API_KEY"), "gemini-2.0-flash", "gemini-2.0-flash")
 
 if not _PROVIDERS:
     raise RuntimeError("No AI API keys found — set at least one of: GITHUB_TOKEN, FREETHEAI_API_KEY, OPENROUTER_API_KEY, HF_TOKEN, etc.")
