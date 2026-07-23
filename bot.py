@@ -77,7 +77,7 @@ if FREETHEAI_KEY and OPENROUTER_KEY:
     )
     _fallback_model = "openrouter/free"
 
-MODEL = os.getenv("AI_MODEL", "vova/gemini-3.5-flash" if FREETHEAI_KEY else "openrouter/free")
+MODEL = os.getenv("AI_MODEL", "bbl/gemini-3.5-flash" if FREETHEAI_KEY else "openrouter/free")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
