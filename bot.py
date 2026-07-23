@@ -68,11 +68,12 @@ else:
         api_key=os.getenv("GEMINI_API_KEY"),
     )
 
-MODEL = os.getenv("AI_MODEL", "kai/openrouter/free" if FREETHEAI_KEY else "openrouter/free")
+MODEL = os.getenv("AI_MODEL", "kai/nvidia/nemotron-3-ultra-550b-a55b:free" if FREETHEAI_KEY else "openrouter/free")
+VISION_MODEL = os.getenv("VISION_MODEL", "kai/openrouter/free")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
-print(f"[STARTUP] AI provider: {'FreeTheAi' if FREETHEAI_KEY else 'Unknown'}, model: {MODEL}")
+print(f"[STARTUP] AI provider: {'FreeTheAi' if FREETHEAI_KEY else 'Unknown'}, text model: {MODEL}, vision model: {VISION_MODEL}")
 print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
 
 
@@ -2306,6 +2307,7 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     if history:
         messages.extend(history)
 
+    use_model = VISION_MODEL if image_urls else MODEL
     if image_urls:
         content_parts = [{"type": "text", "text": prompt}]
         for url in image_urls:
@@ -2318,7 +2320,7 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
         messages.append({"role": "user", "content": prompt})
 
     response = client.chat.completions.create(
-        model=MODEL,
+        model=use_model,
         messages=messages,
         temperature=temperature,
         max_tokens=max_tokens,
