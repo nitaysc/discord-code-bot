@@ -109,6 +109,21 @@ def _search_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
     return []
 
 
+def _search_images_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
+    last_err = None
+    for attempt in range(3):
+        try:
+            results = list(DDGS().images(query, max_results=max_results))
+            if results:
+                return results
+        except Exception as e:
+            last_err = e
+            print(f"DuckDuckGo image search attempt {attempt+1} error: {e}")
+        import time; time.sleep(1)
+    print(f"DuckDuckGo image search failed after retries: {last_err}")
+    return []
+
+
 async def _search_serpapi(query: str, api_key: str, max_results: int = 5) -> list[dict]:
     try:
         url = "https://serpapi.com/search.json"
@@ -204,6 +219,19 @@ async def web_search(query: str, max_results: int = 5) -> str:
         snippet = r.get("body", "")
         link = r.get("href", "")
         lines.append(f"[{i}] {title}\n{snippet}\n{link}")
+    return "\n\n".join(lines)
+
+
+async def web_image_search(query: str, max_results: int = 5) -> str:
+    results = await asyncio.to_thread(lambda: _search_images_duckduckgo(query, max_results))
+    if not results:
+        return ""
+    lines = []
+    for i, r in enumerate(results[:max_results], 1):
+        title = r.get("title", "")
+        img_url = r.get("image", "")
+        src_url = r.get("url", "")
+        lines.append(f"[{i}] {title}\n{img_url}\n{src_url}")
     return "\n\n".join(lines)
 
 
@@ -2594,6 +2622,7 @@ async def answer_with_web_search_if_needed(
     history: list[dict] | None = None,
     image_urls: list[str] | None = None,
     temperature: float = 0.7,
+    channel_id: int | None = None,
 ) -> str:
     needs_search, raw_query = should_search(prompt)
     if needs_search:
@@ -2611,13 +2640,28 @@ async def answer_with_web_search_if_needed(
             if search_results and not search_results.startswith("Search error:"):
                 break
             search_results = ""
+        image_results = ""
         if search_results:
-            enhanced_prompt = (
-                f"{prompt}\n\n[Web search results for '{search_query}':\n"
-                f"{search_results}\n\n"
-                f"Use the search results above along with the conversation context and your own knowledge to answer. "
-                f"The search results are up-to-date and should be trusted for factual claims."
+            image_results = await web_image_search(search_query, max_results=4)
+            if image_results and channel_id is not None:
+                img_urls = []
+                for line in image_results.split("\n"):
+                    if line.startswith("http"):
+                        img_urls.append(line)
+                if img_urls:
+                    _last_search_images[channel_id] = img_urls
+        if search_results or image_results:
+            parts = [f"{prompt}"]
+            if search_results:
+                parts.append(f"[Web search results for '{search_query}':\n{search_results}]")
+            if image_results:
+                parts.append(f"[Image search results for '{search_query}':\n{image_results}]")
+            parts.append(
+                "Use the search results above along with the conversation context and your own knowledge to answer. "
+                "The search results are up-to-date and should be trusted for factual claims. "
+                "If there are image results, describe them or include the image URLs directly in your answer."
             )
+            enhanced_prompt = "\n\n".join(parts)
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
         print("[SEARCH] all backends failed - answering from AI knowledge only")
         return await call_ai(CHAT_SYSTEM, prompt, history, temperature, image_urls=image_urls)
@@ -2915,6 +2959,7 @@ bot = CodeBot()
 _channel_locks: dict[int, asyncio.Lock] = {}
 _channel_image_cache: dict[int, tuple[list[str], float]] = {}  # channel_id -> (urls, timestamp)
 _last_image_prompt: dict[int, str] = {}  # channel_id -> last prompt used
+_last_search_images: dict[int, list[str]] = {}  # channel_id -> image URLs from last search
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -3188,7 +3233,7 @@ async def on_message(message):
                         history = get_history(channel_id)
                         prompt = content + context_extra
                         answer = await answer_with_web_search_if_needed(
-                            prompt, history, image_urls=image_urls if image_urls else None
+                            prompt, history, image_urls=image_urls if image_urls else None, channel_id=channel_id
                         )
                         add_to_history(channel_id, "assistant", answer)
                         visible_answer = "\n".join(
@@ -3200,6 +3245,14 @@ async def on_message(message):
                                     await message.reply(chunk, mention_author=False)
                                 except discord.HTTPException:
                                     await message.channel.send(chunk)
+                        # Send image URLs from search after the AI response
+                        img_urls = _last_search_images.pop(channel_id, [])
+                        if img_urls:
+                            img_lines = "\n".join(img_urls[:4])
+                            try:
+                                await message.channel.send(f"📷 **Images found:**\n{img_lines}")
+                            except Exception:
+                                pass
                         action_results = await execute_admin_actions(message, answer)
                         for result in action_results:
                             for chunk in _chunk_text(result):
@@ -3683,7 +3736,7 @@ async def slash_hey(interaction: discord.Interaction, message: str):
             await handle_create_request(interaction.channel, message)
         else:
             history = get_history(channel_id)
-            answer = await answer_with_web_search_if_needed(message, history)
+            answer = await answer_with_web_search_if_needed(message, history, channel_id=channel_id)
             add_to_history(channel_id, "assistant", answer)
             await interaction.followup.send(answer)
     except Exception as e:
