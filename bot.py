@@ -415,27 +415,78 @@ def should_search(question: str) -> tuple[bool, str]:
     return False, ""
 
 
+SEARCH_STOP_WORDS = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "must", "can", "cant", "cannot",
+    "i", "you", "he", "she", "it", "we", "they", "me", "him", "her",
+    "us", "them", "my", "your", "his", "its", "our", "their",
+    "this", "that", "these", "those", "there", "here",
+    "and", "or", "but", "so", "yet", "for", "nor", "as", "of", "in", "on",
+    "at", "to", "from", "by", "with", "about", "into", "through", "during",
+    "before", "after", "above", "below", "between", "among", "within",
+    "what", "whats", "what's", "which", "who", "whom", "whose", "where",
+    "when", "why", "how", "hows", "how's", "howmuch", "howmuchis",
+    "tell", "give", "show", "find", "search", "look", "check", "get",
+    "please", "pls", "thank", "thanks", "bro", "dude", "hey", "hi", "hello",
+    "made", "make", "like", "just", "only", "also", "even", "very", "really",
+    "much", "many", "some", "any", "all", "both", "each", "every", "most",
+    "other", "another", "such", "no", "not", "yes", "ok", "okay",
+}
+
+
+def _strip_filler_words(text: str) -> str:
+    """Remove stop/filler words and collapse repeated letters."""
+    words = []
+    for w in text.lower().split():
+        w = re.sub(r"(.)\1{2,}", r"\1\1", w)  # soooo -> soo
+        w = w.strip("?.,!;:'\"/")
+        if w and w not in SEARCH_STOP_WORDS:
+            words.append(w)
+    return " ".join(words)
+
+
 async def _extract_search_query(question: str) -> str:
     """Use the AI to turn a messy question into a concise Google search query."""
+    clean = _clean_search_question(question)
+    fallback = _strip_filler_words(clean)
     try:
-        clean = _clean_search_question(question)
         response = await asyncio.to_thread(
             client.chat.completions.create,
             model=MODEL,
             messages=[
-                {"role": "system", "content": "You extract concise web search queries. Return ONLY the query, nothing else. Use the most relevant keywords. Max 10 words."},
-                {"role": "user", "content": f"Extract a search query from: {clean}"},
+                {"role": "system", "content": textwrap.dedent("""\
+                    You turn messy user questions into concise Google search queries.
+                    Rules:
+                    - Output ONLY the query, no quotes, no explanation, no intro.
+                    - Max 8 words.
+                    - Keep product names, brands, dates, numbers, prices.
+                    - Remove greetings, slang, filler, and question words.
+
+                    Examples:
+                    User: hey bro whats the latest graphic card nvidia made and how much it costs
+                    Query: latest NVIDIA graphics card price
+
+                    User: look online when is gta vi coming out
+                    Query: GTA VI release date
+
+                    User: search latest iphone price 2026
+                    Query: iPhone price 2026
+                """)},
+                {"role": "user", "content": f"User: {clean}\nQuery:"},
             ],
             temperature=0.0,
-            max_tokens=40,
+            max_tokens=25,
         )
         query = response.choices[0].message.content.strip()
-        # Remove quotes if the AI wraps them
-        query = query.strip('"').strip("'")
-        return query if query else clean
+        query = query.strip('"').strip("'").strip()
+        # If AI failed to shorten, use fallback
+        if not query or len(query.split()) > 12 or query.lower() == clean.lower():
+            return fallback
+        return query
     except Exception as e:
         print(f"[SEARCH] query extraction failed: {e}")
-        return _clean_search_question(question)
+        return fallback
 
 
 LANG_EXTENSIONS = {
