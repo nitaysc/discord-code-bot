@@ -2780,6 +2780,7 @@ class CodeBot(commands.Bot):
 
 bot = CodeBot()
 _channel_locks: dict[int, asyncio.Lock] = {}
+_channel_image_cache: dict[int, tuple[list[str], float]] = {}  # channel_id -> (urls, timestamp)
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -2848,6 +2849,14 @@ async def on_message(message):
                     file_contexts.append(f"[Attached file `{filename}`:\n```\n{file_text}\n```]")
 
         channel_id = message.channel.id
+        if image_urls:
+            _channel_image_cache[channel_id] = (image_urls, time.time())
+        else:
+            # No new images — reuse recent cached images from same channel (within 5 min)
+            cached = _channel_image_cache.get(channel_id)
+            if cached and time.time() - cached[1] < 300:
+                image_urls = cached[0]
+
         display_name = message.author.display_name
         history_entry = f"{display_name}: {content}"
         if image_urls:
