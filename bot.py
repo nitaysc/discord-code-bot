@@ -2260,7 +2260,7 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                         except Exception:
                             pass
                     return text_cb
-                sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=20)
+                sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=15)
                 vc.listen(sink)
                 _voice_recv_active[guild.id] = True
                 return f":loud_sound: Joined **{voice}** and listening."
@@ -4446,30 +4446,22 @@ def _make_process_cb():
         from discord.ext.voice_recv.extras.speechrecognition import DiscordSRAudioSource as _DiscordSRAudioSource
         _orig_read = _DiscordSRAudioSource.read
         def _patched_read(self, size: int) -> bytes:
-            import time as _time
-            for _ in range(50):
-                if len(self.buffer) < size * self.CHANNELS:
-                    _time.sleep(0.1)
-                else:
-                    break
-            else:
-                if len(self.buffer) == 0:
-                    return b''
             chunksize = size * self.CHANNELS
-            audiochunk = self.buffer[:chunksize].tobytes()
-            del self.buffer[: min(chunksize, len(audiochunk))]
-            import audioop as _audioop
-            audiochunk = _audioop.tomono(audiochunk, 2, 1, 1)
-            return audiochunk
+            if len(self.buffer) >= chunksize:
+                audiochunk = self.buffer[:chunksize].tobytes()
+                del self.buffer[:chunksize]
+                import audioop as _audioop
+                return _audioop.tomono(audiochunk, 2, 1, 1)
+            return b'\x00' * size * 2
         _DiscordSRAudioSource.read = _patched_read
     except Exception:
         pass
 
     def process_cb(recognizer: sr.Recognizer, audio: sr.AudioData, user) -> str | None:
-        # Tune for better accuracy
+        # Tune for fast + accurate voice detection
         recognizer.dynamic_energy_threshold = True
-        recognizer.pause_threshold = 1.5
-        recognizer.phrase_threshold = 0.5
+        recognizer.pause_threshold = 0.8
+        recognizer.phrase_threshold = 0.3
         for lang in ("he-IL", "en-US"):
             try:
                 text = recognizer.recognize_google(audio, language=lang)
@@ -4605,7 +4597,7 @@ async def slash_vjoin(interaction: discord.Interaction):
                 pass
         return text_cb
     try:
-        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=20)
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=15)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
     except Exception as e:
