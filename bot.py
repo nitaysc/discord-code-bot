@@ -2667,18 +2667,20 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     raise RuntimeError(f"All {len(_PROVIDERS)} providers exhausted")
 
 
-AI_TIMEOUT = 25
+AI_TIMEOUT = 40
+_AI_SEMAPHORE = asyncio.Semaphore(3)
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
                   temperature: float = 0.5, max_tokens: int = 4096,
                   image_urls: list[str] | None = None,
-                  skip_rate_limit: bool = False) -> str:
+                   skip_rate_limit: bool = False) -> str:
     timeout = 30 if skip_rate_limit else AI_TIMEOUT
-    return await asyncio.wait_for(
-        asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls, skip_rate_limit),
-        timeout=timeout,
-    )
+    async with _AI_SEMAPHORE:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls, skip_rate_limit),
+            timeout=timeout,
+        )
 
 
 async def answer_with_web_search_if_needed(
