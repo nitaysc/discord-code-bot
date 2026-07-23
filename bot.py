@@ -4353,6 +4353,7 @@ async def slash_vjoin(interaction: discord.Interaction):
     guild_id = guild.id
     def make_text_cb():
         def text_cb(user, text):
+            print(f"[VOICE RECV DEBUG] text_cb called: user={user}, text='{text}'")
             if not text or len(text.strip()) < 2:
                 return
             try:
@@ -4361,8 +4362,22 @@ async def slash_vjoin(interaction: discord.Interaction):
             except Exception:
                 pass
         return text_cb
+    def make_process_cb():
+        import speech_recognition as sr
+        def process_cb(recognizer: sr.Recognizer, audio: sr.AudioData, user) -> str | None:
+            try:
+                text = recognizer.recognize_google(audio)
+                print(f"[VOICE RECV DEBUG] Google recognized: '{text}' from {user}")
+                return text
+            except sr.UnknownValueError:
+                print(f"[VOICE RECV DEBUG] Google could not understand audio from {user}")
+                return None
+            except sr.RequestError as e:
+                print(f"[VOICE RECV DEBUG] Google API error: {e}")
+                return None
+        return process_cb
     try:
-        sink = SpeechRecognitionSink(text_cb=make_text_cb(), default_recognizer='google', phrase_time_limit=8)
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=8)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
     except Exception as e:
