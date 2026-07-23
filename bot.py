@@ -2878,13 +2878,19 @@ async def on_message(message):
                     else:
                         context_extra = ""
                         content_lower = content.lower()
-                        if message.guild and any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"]):
-                            voice_info = get_voice_info(message.guild)
-                            context_extra = f"\n\n[Current server voice channels and members (use this to answer):\n{voice_info}]"
+                        if message.guild:
+                            has_other_mentions = any(
+                                m.id != bot.user.id for m in message.mentions
+                            )
+                            server_keywords = ["where", "wheres", "where's", "everyone", "people", "member", "members", "server", "channel", "channels", "role", "roles", "create", "make", "add"]
+                            if has_other_mentions or any(w in content_lower for w in ["voice", "vc", "vchat", "voice chat", "talk", "channel"] + server_keywords):
+                                voice_info = get_voice_info(message.guild)
+                                server_info = get_server_info(message.guild)
+                                context_extra = f"\n\n[Server info:\n{server_info}]\n\n[Voice channels:\n{voice_info}]"
                         if file_extra:
                             context_extra += f"\n\n{file_extra}"
 
-                        admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole"]
+                        admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole", "create"]
                         if any(kw in content_lower for kw in admin_keywords):
                             context_extra += "\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]"
 
@@ -3590,6 +3596,30 @@ def get_voice_info(guild: discord.Guild) -> str:
     if not vc_data:
         return "No voice channels exist."
     return "\n".join(vc_data)
+
+
+def get_server_info(guild: discord.Guild) -> str:
+    total = len(guild.members)
+    online = sum(1 for m in guild.members if m.status != discord.Status.offline)
+    bots = sum(1 for m in guild.members if m.bot)
+    roles = ", ".join(r.mention for r in guild.roles[1:] if not r.is_default())
+    text_channels = ", ".join(c.mention for c in guild.text_channels if c.permissions_for(guild.me).read_messages)
+    parts = [
+        f"Server: {guild.name}",
+        f"Members: {total} total ({online} online, {bots} bots)",
+        f"Roles: {roles}",
+        f"Text channels: {text_channels}",
+    ]
+    vc_data = []
+    for vc in guild.voice_channels:
+        members = vc.members
+        if members:
+            names = ", ".join(m.display_name for m in members)
+            vc_data.append(f"{vc.name}: {names}")
+        else:
+            vc_data.append(f"{vc.name}: empty")
+    parts.append("Voice channels:\n" + "\n".join(vc_data) if vc_data else "Voice channels: none")
+    return "\n".join(parts)
 
 
 @bot.tree.command(name="voicelist", description="See who's in voice channels")
