@@ -2763,14 +2763,20 @@ async def on_message(message):
                         ).strip()
                         if visible_answer:
                             for chunk in _chunk_text(visible_answer):
-                                await message.reply(chunk, mention_author=False)
+                                try:
+                                    await message.reply(chunk, mention_author=False)
+                                except discord.HTTPException:
+                                    await message.channel.send(chunk)
                         action_results = await execute_admin_actions(message, answer)
                         for result in action_results:
                             for chunk in _chunk_text(result):
                                 await message.channel.send(chunk)
                 except Exception as e:
                     for chunk in _chunk_text(f":x: Error: {e}"):
-                        await message.reply(chunk, mention_author=False)
+                        try:
+                            await message.reply(chunk, mention_author=False)
+                        except discord.HTTPException:
+                            await message.channel.send(chunk)
             return
 
     if message.guild:
