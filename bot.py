@@ -398,14 +398,20 @@ SEARCH_TRIGGER_WORDS = {
     "latest", "current", "today", "news", "weather", "price", "prices",
     "score", "scores", "update", "recent", "happened", "happening", "live",
     "stock", "crypto", "bitcoin", "election", "winner", "winners", "results",
-    "release date", "age of", "net worth",
+    "release date", "release", "released", "age of", "net worth",
+    "episode", "episodes", "season", "seasons", "premiere", "premieres",
+    "schedule", "scheduled", "dropping", "drops", "drop", "upcoming",
+    "future", "plan to", "planning", "planned", "announced",
     "search for", "look up", "look online", "find online", "check online", "google",
     "lookonline", "lookup", "searchonline",
     "how to",
     "world cup", "olympics", "super bowl", "champions league", "eurovision",
     "2025", "2026", "2027", "yesterday", "tomorrow", "this week", "last week",
-    "coming out", "launch", "announced",
+    "coming out", "out now", "out today", "launch",
 }
+
+# Common bot command prefixes to strip before checking question starters
+BOT_PREFIXES = (".", "!", "?", "/", ">", "-", "+", "$", "%", "^", "&", "*", "~")
 
 
 def _clean_search_question(question: str) -> str:
@@ -418,18 +424,35 @@ def _clean_search_question(question: str) -> str:
     return q
 
 
+def _strip_prefix(text: str) -> str:
+    """Remove bot command prefix (e.g. .fxnitay) from the start."""
+    for p in BOT_PREFIXES:
+        if text.startswith(p):
+            # Strip the prefix character and any following word (the command name)
+            rest = text[len(p):].lstrip()
+            # Remove the first word (command name like "fxnitay")
+            parts = rest.split(None, 1)
+            if len(parts) > 1:
+                return parts[1]
+            return rest
+    return text
+
+
 def should_search(question: str) -> tuple[bool, str]:
     lowered = question.lower()
-    # Word-boundary matching to avoid false positives
-    import re
     if any(re.search(r'\b' + re.escape(w) + r'\b', lowered) for w in SEARCH_TRIGGER_WORDS):
         return True, _clean_search_question(question)
-    # Question starters that usually need current facts
+    # Strip bot prefix and check question starters
+    unprefixed = _strip_prefix(lowered)
     question_starters = (
         "when ", "where ", "who ", "how much ", "how many ", "how old ",
-        "why is ", "why are ", "what is ", "what are ", "what was ", "what were ",
+        "why is ", "why are ", "what is ", "whats ", "what's ",
+        "what are ", "what was ", "what were ", "what does ", "what do ",
+        "tell me when ", "tell me what ", "tell me who ", "tell me where ",
+        "do you know ", "do you have ", "has there been ", "is there ",
+        "are there ", "any news ", "any update ", "any info ",
     )
-    if lowered.startswith(question_starters):
+    if lowered.startswith(question_starters) or unprefixed.startswith(question_starters):
         return True, _clean_search_question(question)
     return False, ""
 
