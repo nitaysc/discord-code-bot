@@ -6,6 +6,7 @@ import re
 import sqlite3
 import tempfile
 import textwrap
+import threading
 import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
@@ -2336,9 +2337,23 @@ async def send_raw_file(channel, content: str, file_type: str | None):
     os.unlink(tmp.name)
 
 
+_last_ai_call = 0.0
+_ai_rate_lock = threading.Lock()
+
+
+def _rate_limit():
+    global _last_ai_call
+    with _ai_rate_lock:
+        elapsed = time.time() - _last_ai_call
+        if elapsed < 7:
+            time.sleep(7 - elapsed)
+        _last_ai_call = time.time()
+
+
 def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
               temperature: float = 0.5, max_tokens: int = 4096,
               image_urls: list[str] | None = None) -> str:
+    _rate_limit()
     now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     messages = [{"role": "system", "content": f"{system}\nCurrent UTC time: {now} UTC."}]
     if history:
@@ -2356,7 +2371,7 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     else:
         messages.append({"role": "user", "content": prompt})
 
-    for attempt in range(5):
+    for attempt in range(6):
         try:
             response = client.chat.completions.create(
                 model=use_model,
@@ -2364,20 +2379,18 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            break
+            if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
+                return response.choices[0].message.content
+            return ""
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
-                wait = 2 ** attempt
-                print(f"[RETRY] AI call rate-limited (attempt {attempt+1}/5), waiting {wait}s: {e}")
+                wait = (2 ** attempt) + random.uniform(0, 2)
+                print(f"[RETRY] AI call rate-limited (attempt {attempt+1}/6), waiting {wait:.1f}s: {e}")
                 time.sleep(wait)
             else:
                 raise
-    else:
-        raise RuntimeError("AI call failed after 5 retries due to rate limits")
-    if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
-        return response.choices[0].message.content
-    return ""
+    raise RuntimeError("AI call failed after 6 retries due to rate limits")
 
 
 AI_TIMEOUT = 45
