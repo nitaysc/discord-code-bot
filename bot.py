@@ -2097,8 +2097,8 @@ FACTS & INFO:
 CODE_SYSTEM = textwrap.dedent("""\
 You are a coding assistant. Write code based on the user's request.
 If the request is vague or missing details, use sensible defaults and write the code anyway.
-Do NOT ask clarifying questions. Do NOT explain what details are needed.
-Output ONLY the code in a code block with language tag. No explanations outside the code block.
+Do NOT ask clarifying questions.
+CRITICAL: Output ONLY the code wrapped in triple backticks ``` with a language tag. No explanations. No text outside the code block. ONLY the code block.
 Follow best practices and proper syntax.
 """)
 
@@ -2106,7 +2106,7 @@ YIMMENU_LUA_SYSTEM = textwrap.dedent("""\
 You are a YimMenuV2 Lua scripting assistant for GTA V Enhanced.
 Write Lua scripts that work with the YimMenuV2 mod menu.
 Do NOT ask clarifying questions. Use sensible defaults and write complete, working code.
-Output ONLY the code in a code block with `lua` language tag. No explanations outside the code block.
+CRITICAL: Output ONLY the code wrapped in triple backticks ```lua. No explanations. No text outside the code block. ONLY the code block.
 
 CRITICAL API RULES — never violate these:
 - natives.load_natives() takes NO arguments. Never write natives.load_natives(number).
@@ -2485,6 +2485,28 @@ def _is_yimmenu_request(prompt: str) -> bool:
     return any(k in lowered for k in YIMMENU_KEYWORDS) and ("lua" in lowered or "script" in lowered)
 
 
+CODE_LINE_KEYWORDS = {"function", "if ", "for ", "while ", "local ", "end,", "return ", "import ", "def ", "class ", "var ", "let ", "const ", "#include", "int ", "float ", "void ", "public ", "private ", "namespace", "using "}
+
+def _looks_like_code(text: str) -> bool:
+    """Detect if text contains code even without backtick blocks."""
+    lines = text.split("\n")
+    code_lines = 0
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//") or stripped.startswith("--") or stripped.startswith("#"):
+            continue
+        if any(kw in stripped.lower() for kw in CODE_LINE_KEYWORDS):
+            code_lines += 1
+            if code_lines >= 3:
+                return True
+        # Lines with indentation followed by code patterns
+        if line.startswith(("    ", "\t")) and any(c in stripped for c in ("=", "(", ")", "{", "}")):
+            code_lines += 1
+            if code_lines >= 3:
+                return True
+    return False
+
+
 async def handle_create_request(channel, prompt: str, reply_target=None):
     file_type, file_kind = detect_file_type(prompt)
     channel_id = channel.id
@@ -2547,6 +2569,10 @@ async def handle_create_request(channel, prompt: str, reply_target=None):
                     f":warning: `.{
                         blang}` is a binary format. The content above is source code."
                 )
+        return
+
+    if _looks_like_code(text):
+        await send_raw_file(channel, text, file_type)
         return
 
     if _looks_conversational(text):
