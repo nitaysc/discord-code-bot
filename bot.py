@@ -2178,7 +2178,7 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                         except Exception:
                             pass
                     return text_cb
-                sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=6, min_audio_length=0.5)
+                sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=6)
                 vc.listen(sink)
                 _voice_recv_active[guild.id] = True
                 return f":loud_sound: Joined **{voice}** and listening."
@@ -4408,7 +4408,7 @@ async def slash_vjoin(interaction: discord.Interaction):
                 pass
         return text_cb
     try:
-        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=6, min_audio_length=0.5)
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=6)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
     except Exception as e:
