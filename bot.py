@@ -2929,7 +2929,10 @@ async def on_message(message):
 
                         admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole", "create"]
                         if any(kw in content_lower for kw in admin_keywords):
-                            context_extra += "\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]"
+                            hint = ""
+                            if any(w in content_lower for w in ["create", "make", "new", "add"]):
+                                hint = "\n[To create: use ACTION: create channel #name text  |  ACTION: create channel #name voice  |  ACTION: create channel #name category]"
+                            context_extra += f"\n\n[INSTRUCTION: This is an admin action request. Output ONLY the required ACTION: line(s) at the end. Do NOT explain, ask for confirmation, or say you cannot do it. The system will verify permissions and execute it.]{hint}"
 
                         if any(w in content_lower for w in ["mute", "deafen"]) and any(w in content_lower for w in ["voice", "vc"]):
                             context_extra += "\n[Voice action: use ACTION: voicemute @user or ACTION: deafen @user.]"
