@@ -4393,7 +4393,7 @@ async def slash_vjoin(interaction: discord.Interaction):
             return None
         return process_cb
     try:
-        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=3)
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=6, min_audio_length=0.5)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
     except Exception as e:
