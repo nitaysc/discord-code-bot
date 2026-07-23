@@ -68,20 +68,11 @@ else:
         api_key=os.getenv("GEMINI_API_KEY"),
     )
 
-_fallback_client = None
-_fallback_model = None
-if FREETHEAI_KEY and OPENROUTER_KEY:
-    _fallback_client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=OPENROUTER_KEY,
-    )
-    _fallback_model = "openrouter/free"
-
 MODEL = os.getenv("AI_MODEL", "kai/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" if FREETHEAI_KEY else "openrouter/free")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
-print(f"[STARTUP] AI provider: {'FreeTheAi (primary) + OpenRouter (fallback)' if _fallback_client else ('FreeTheAi' if FREETHEAI_KEY else MODEL)}")
+print(f"[STARTUP] AI provider: {'FreeTheAi' if FREETHEAI_KEY else MODEL}")
 print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
 
 
@@ -2326,24 +2317,12 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     else:
         messages.append({"role": "user", "content": prompt})
 
-    try:
-        response = client.chat.completions.create(
-            model=MODEL,
-            messages=messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    except Exception as e:
-        if _fallback_client:
-            print(f"[FALLBACK] Primary failed ({e}), using fallback")
-            response = _fallback_client.chat.completions.create(
-                model=_fallback_model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-        else:
-            raise
+    response = client.chat.completions.create(
+        model=MODEL,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
     return response.choices[0].message.content or ""
 
 
