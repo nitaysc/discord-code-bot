@@ -2879,6 +2879,25 @@ async def on_message(message):
                     else:
                         context_extra = ""
                         content_lower = content.lower()
+
+                        # Chat-based channel read/summarize
+                        read_keywords = ["summary", "summarize", "summerize", "read", "recap", "summarise"]
+                        if message.guild and any(w in content_lower for w in read_keywords):
+                            try:
+                                target = message.channel_mentions[0] if message.channel_mentions else message.channel
+                                msgs = [m async for m in target.history(limit=50)]
+                                if msgs:
+                                    lines = [f"{m.author.display_name}: {m.content or '[attachment]'}" for m in reversed(msgs)]
+                                    chat = "\n".join(lines)
+                                    summary = await call_ai(CHAT_SYSTEM, f"Summarize these {len(msgs)} messages from #{target.name} in 2-3 sentences:\n\n{chat}", temperature=0.3, max_tokens=500)
+                                    await message.reply(f":book: **#{target.name}**:\n{summary}")
+                                    return
+                                await message.reply(f":x: No messages in #{target.name}.")
+                                return
+                            except Exception as e:
+                                await message.reply(f":x: Could not read that channel: {e}")
+                                return
+
                         if message.guild:
                             has_other_mentions = any(
                                 m.id != bot.user.id for m in message.mentions
