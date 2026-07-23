@@ -25,6 +25,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from openai import OpenAI
 import wavelink
+from minecraft_bot import MCBotManager, HAS_MC_BOT
 from ddgs import DDGS
 from PIL import Image, ImageDraw, ImageFont
 
@@ -5859,5 +5860,85 @@ async def _patched_setup_hook(self):
 
 CodeBot.setup_hook = _patched_setup_hook
 
+
+_mc_bot = MCBotManager()
+
+_mc_mc_group = discord.app_commands.Group(name="mc", description="Minecraft bot commands")
+
+@_mc_mc_group.command(name="join", description="Join a Minecraft server")
+@app_commands.describe(host="Server IP or domain", port="Port (default 25565)", username="Bot username")
+async def mc_join(interaction: discord.Interaction, host: str, port: int = 25565, username: str = "NullBot"):
+    await interaction.response.defer()
+    async def _chat_relay(sender: str, message: str):
+        if _mc_bot._mc_channel_id:
+            ch = bot.get_channel(_mc_bot._mc_channel_id)
+            if ch:
+                await ch.send(f"**[{sender}]** {message}")
+    result = await _mc_bot.connect(host, port, username, _chat_relay, interaction.channel_id)
+    await interaction.followup.send(result)
+
+@_mc_mc_group.command(name="leave", description="Leave the Minecraft server")
+async def mc_leave(interaction: discord.Interaction):
+    await _mc_bot.disconnect()
+    await interaction.response.send_message(":door: Left the server.")
+
+@_mc_mc_group.command(name="say", description="Send a chat message in Minecraft")
+@app_commands.describe(message="Message to send")
+async def mc_say(interaction: discord.Interaction, message: str):
+    if not _mc_bot.connected:
+        await interaction.response.send_message(":x: Not connected to a Minecraft server")
+        return
+    await _mc_bot.send_chat(f"[Discord] {interaction.user.display_name}: {message}")
+    await interaction.response.send_message(f":speech_balloon: Sent: {message}")
+
+@_mc_mc_group.command(name="follow", description="Follow a player")
+@app_commands.describe(target="Player name to follow")
+async def mc_follow(interaction: discord.Interaction, target: str):
+    await interaction.response.defer()
+    result = await _mc_bot.follow(target)
+    await interaction.followup.send(result)
+
+@_mc_mc_group.command(name="come", description="Make the bot come to your position (use coordinates)")
+@app_commands.describe(x="X coordinate", y="Y coordinate", z="Z coordinate")
+async def mc_come(interaction: discord.Interaction, x: float, y: float, z: float):
+    await interaction.response.defer()
+    result = await _mc_bot.come_to(x, y, z)
+    await interaction.followup.send(result)
+
+@_mc_mc_group.command(name="goto", description="Move to coordinates")
+@app_commands.describe(x="X coordinate", y="Y coordinate", z="Z coordinate")
+async def mc_goto(interaction: discord.Interaction, x: float, y: float, z: float):
+    await interaction.response.defer()
+    result = await _mc_bot.goto(x, y, z)
+    await interaction.followup.send(result)
+
+@_mc_mc_group.command(name="stop", description="Stop all actions (follow, etc.)")
+async def mc_stop(interaction: discord.Interaction):
+    result = await _mc_bot.stop()
+    await interaction.response.send_message(result)
+
+@_mc_mc_group.command(name="attack", description="Attack a nearby player")
+@app_commands.describe(target="Player name to attack")
+async def mc_attack(interaction: discord.Interaction, target: str):
+    await interaction.response.defer()
+    result = await _mc_bot.attack(target)
+    await interaction.followup.send(result)
+
+@_mc_mc_group.command(name="mine", description="Mine the block you're looking at")
+async def mc_mine(interaction: discord.Interaction):
+    await interaction.response.defer()
+    result = await _mc_bot.mine()
+    await interaction.followup.send(result)
+
+@_mc_mc_group.command(name="pos", description="Show the bot's current position")
+async def mc_pos(interaction: discord.Interaction):
+    pos = _mc_bot.get_position()
+    if pos:
+        x, y, z = pos
+        await interaction.response.send_message(f":military_helmet: Position: **{x:.1f}, {y:.1f}, {z:.1f}**")
+    else:
+        await interaction.response.send_message(":x: Not connected")
+
+bot.tree.add_command(_mc_mc_group)
 
 bot.run(TOKEN)
