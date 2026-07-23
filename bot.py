@@ -2913,6 +2913,7 @@ class CodeBot(commands.Bot):
 bot = CodeBot()
 _channel_locks: dict[int, asyncio.Lock] = {}
 _channel_image_cache: dict[int, tuple[list[str], float]] = {}  # channel_id -> (urls, timestamp)
+_last_image_prompt: dict[int, str] = {}  # channel_id -> last prompt used
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -3062,22 +3063,46 @@ async def on_message(message):
                         img_keywords = ["generate", "create", "draw", "make", "imagine"]
                         img_nouns = ["image", "picture", "photo", "art", "drawing", "painting", "render", "illustration", "icon", "banner", "logo", "meme"]
                         stripped = re.sub(r'[^\w\s]', '', content_lower)
-                        if any(kw in content_lower for kw in img_keywords) and any(noun in stripped for noun in img_nouns):
+
+                        # Check if replying to a previous bot image
+                        is_img_reply = False
+                        prev_prompt = _last_image_prompt.get(message.channel.id)
+                        if is_reply_to_bot and message.reference and message.reference.message_id:
+                            try:
+                                ref_msg = await message.channel.fetch_message(message.reference.message_id)
+                                if ref_msg.author.id == bot.user.id and ref_msg.attachments:
+                                    is_img_reply = True
+                                    ref_text = ref_msg.content.strip('_').strip()
+                                    if ref_text:
+                                        prev_prompt = ref_text
+                            except Exception:
+                                pass
+
+                        trigger_img = (any(kw in content_lower for kw in img_keywords) and any(noun in stripped for noun in img_nouns))
+                        if trigger_img or is_img_reply:
                             await message.channel.typing()
-                            prompt = content
-                            for kw in img_keywords + img_nouns:
-                                prompt = re.sub(r'\b' + kw + r'\b', '', prompt, flags=re.IGNORECASE)
+                            if is_img_reply and not trigger_img:
+                                prompt = content
+                            else:
+                                prompt = content
+                                for kw in img_keywords + img_nouns:
+                                    prompt = re.sub(r'\b' + kw + r'\b', '', prompt, flags=re.IGNORECASE)
                             prompt = re.sub(r'\s+', ' ', prompt).strip().strip('.,!?;:')
                             if not prompt or len(prompt) < 3:
                                 prompt = content
+                            # Merge with previous prompt when replying to an image
+                            if is_img_reply and prev_prompt and prev_prompt != prompt and prev_prompt not in prompt:
+                                prompt = f"{prev_prompt}, {prompt}"
                             try:
-                                img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=1024&height=1024&model=flux&nologo=true"
+                                seed = random.randint(1, 999999)
+                                img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
                                 timeout = aiohttp.ClientTimeout(total=30)
                                 async with aiohttp.ClientSession(timeout=timeout) as session:
                                     async with session.get(img_url) as resp:
                                         if resp.status == 200:
                                             img_data = await resp.read()
                                             fp = io.BytesIO(img_data)
+                                            _last_image_prompt[message.channel.id] = prompt
                                             await message.reply(file=discord.File(fp, filename="generated.png"), content=f"_{prompt}_")
                                         else:
                                             await message.reply(f":x: Image generation failed (status {resp.status})")
