@@ -3047,7 +3047,7 @@ async def on_message(message):
                                     return
                                 await message.reply(f":x: No messages in #{target.name}.")
                                 return
-                             except Exception as e:
+                            except Exception as e:
                                 await message.reply(f":x: Could not read that channel: {e}")
                                 return
 
@@ -3063,7 +3063,6 @@ async def on_message(message):
                             if not prompt or len(prompt) < 3:
                                 prompt = content
                             try:
-                            # Pollinations.ai is free, no key needed
                                 img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=1024&height=1024&model=flux&nologo=true"
                                 timeout = aiohttp.ClientTimeout(total=30)
                                 async with aiohttp.ClientSession(timeout=timeout) as session:
