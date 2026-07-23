@@ -383,15 +383,15 @@ class ValorantProfileSelect(discord.ui.Select):
 
 
 SEARCH_TRIGGER_WORDS = {
-    "latest", "current", "today", "now", "news", "weather", "price", "prices",
+    "latest", "current", "today", "news", "weather", "price", "prices",
     "score", "scores", "update", "recent", "happened", "happening", "live",
-    "stock", "crypto", "bitcoin", "election", "who won", "winner", "winners", "results",
-    "release date", "when did", "how old is", "age of", "net worth", "did happen", "has happened",
-    "look online", "look up", "search for", "find online", "check online", "google", "look", "search", "find", "web",
-    "what is", "how to", "how much", "how many", "how old", "where is", "who is", "who was", "why is", "why are",
+    "stock", "crypto", "bitcoin", "election", "winner", "winners", "results",
+    "release date", "age of", "net worth",
+    "search for", "look up", "look online", "find online", "check online", "google",
+    "how to",
     "world cup", "olympics", "super bowl", "champions league", "eurovision",
     "2025", "2026", "2027", "yesterday", "tomorrow", "this week", "last week",
-    "cost", "costs", "buy", "coming out", "launch", "announced", "available",
+    "coming out", "launch", "announced",
 }
 
 
@@ -407,7 +407,9 @@ def _clean_search_question(question: str) -> str:
 
 def should_search(question: str) -> tuple[bool, str]:
     lowered = question.lower()
-    if any(word in lowered for word in SEARCH_TRIGGER_WORDS):
+    # Word-boundary matching to avoid false positives
+    import re
+    if any(re.search(r'\b' + re.escape(w) + r'\b', lowered) for w in SEARCH_TRIGGER_WORDS):
         return True, _clean_search_question(question)
     # Question starters that usually need current facts
     question_starters = (
@@ -2344,10 +2346,16 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     return ""
 
 
+AI_TIMEOUT = 90
+
+
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
                   temperature: float = 0.5, max_tokens: int = 4096,
                   image_urls: list[str] | None = None) -> str:
-    return await asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls)
+    return await asyncio.wait_for(
+        asyncio.to_thread(_call_ai, system, prompt, history, temperature, max_tokens, image_urls),
+        timeout=AI_TIMEOUT,
+    )
 
 
 async def answer_with_web_search_if_needed(
