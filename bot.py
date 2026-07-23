@@ -4468,7 +4468,9 @@ async def _handle_voice_speech(guild_id: int, user, text: str, loop):
             if tts_text:
                 await _speak_in_voice(guild, tts_text)
     except Exception as e:
+        import traceback
         print(f"[VOICE SPEECH] Error: {e}")
+        traceback.print_exc()
     finally:
         _voice_recv_active[guild_id] = True
 
