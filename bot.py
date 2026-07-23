@@ -282,6 +282,71 @@ def _search_valorant_cache(name: str) -> list[tuple[str, str]]:
         return []
 
 
+_URL_CACHE: dict[str, tuple[str, float]] = {}
+_URL_CACHE_TTL = 300  # 5 minutes
+
+
+async def fetch_webpage_text(url: str) -> str | None:
+    cached = _URL_CACHE.get(url)
+    if cached and time.time() - cached[1] < _URL_CACHE_TTL:
+        return cached[0]
+    try:
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url, headers={"User-Agent": "Mozilla/5.0"}, ssl=False, max_redirects=3) as resp:
+                if resp.status != 200:
+                    return None
+                content_type = resp.headers.get("Content-Type", "")
+                if "text/" not in content_type and "html" not in content_type:
+                    return None
+                text = await resp.text(errors="replace")
+        # Strip HTML tags, extract readable text
+        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', ' ', text)
+        text = re.sub(r'\s+', ' ', text).strip()
+        text = re.sub(r'https?://\S+', '', text)  # remove embedded URLs
+        if len(text) > 3000:
+            text = text[:3000] + "..."
+        if len(text) < 50:
+            return None  # too short, probably not useful
+        _URL_CACHE[url] = (text, time.time())
+        return text
+    except Exception as e:
+        print(f"[URL FETCH] error fetching {url}: {e}")
+        return None
+
+
+def _save_user_note(user_id: int, key: str, value: str):
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO user_notes (user_id, note_key, note_value, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(user_id, note_key) DO UPDATE SET note_value = excluded.note_value, updated_at = excluded.updated_at",
+            (user_id, key, value, time.time()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[NOTES] error saving note: {e}")
+
+
+def _get_user_notes(user_id: int) -> str:
+    try:
+        conn = get_db()
+        cur = conn.cursor()
+        cur.execute("SELECT note_key, note_value FROM user_notes WHERE user_id = ? ORDER BY updated_at DESC", (user_id,))
+        rows = cur.fetchall()
+        conn.close()
+        if not rows:
+            return ""
+        notes = [f"{k}: {v}" for k, v in rows]
+        return "User's saved notes:\n" + "\n".join(notes)
+    except Exception as e:
+        print(f"[NOTES] error reading notes: {e}")
+        return ""
+
+
 VALORANT_REGIONS = ["na", "eu", "ap", "kr", "latam", "br"]
 
 
@@ -735,6 +800,13 @@ CREATE TABLE IF NOT EXISTS temp_voice_prefs (
     saved_limit INTEGER,
     saved_privacy TEXT,
     PRIMARY KEY (guild_id, user_id)
+);
+CREATE TABLE IF NOT EXISTS user_notes (
+    user_id BIGINT NOT NULL,
+    note_key TEXT NOT NULL,
+    note_value TEXT NOT NULL,
+    updated_at REAL DEFAULT 0,
+    PRIMARY KEY (user_id, note_key)
 );
 """
 
@@ -1943,6 +2015,12 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
         if action == "unban" and len(args) >= 1:
             return await _action_unban(message, args[0])
 
+        if action == "remember" and len(args) >= 3 and args[0].lower() == "note":
+            note_key = args[1].rstrip(":")
+            note_value = " ".join(args[2:])
+            _save_user_note(message.author.id, note_key, note_value)
+            return f":white_check_mark: Remembered: {note_key} = {note_value}"
+
         if action == "create" and len(args) >= 2 and args[0].lower() == "channel":
             name = args[1]
             if len(args) > 2:
@@ -2165,6 +2243,13 @@ FACTS & INFO:
 - For Valorant stats, direct them to /valorant or /valorantmmr with name+tag.
 - Keep it short and natural. Don't list all features unless they ask.
 - Be yourself. You're not a robot reading a script.
+
+CORRECTIONS:
+- If the user says you're wrong, incorrect, or made a mistake, apologize briefly and re-check the context (search results, conversation history, etc.) to give a better answer. Don't argue or defend yourself.
+
+MEMORY:
+- The user can tell you to "remember" something about them. If you detect patterns like "remember I...", "I live in...", "my name is...", "call me...", "I like...", save it by saying "ACTION: remember key: value" at the end of your reply.
+- Saved notes about the user will be included in your context automatically.
 """)
 
 CODE_SYSTEM = textwrap.dedent("""\
@@ -2906,6 +2991,17 @@ async def on_message(message):
                 if thumb_url and thumb_url not in image_urls:
                     image_urls.append(thumb_url)
 
+        # Fetch webpage content from URLs in message
+        webpage_texts = []
+        url_re = re.compile(r'https?://[^\s<>\'"]+', re.IGNORECASE)
+        found_urls = [m.group(0) for m in url_re.finditer(content)]
+        for url in found_urls[:3]:
+            if any(ext in url.lower() for ext in ['.gif', '.png', '.jpg', '.jpeg', '.webp', '.bmp', '.mp4', '.mp3']):
+                continue
+            text = await fetch_webpage_text(url)
+            if text:
+                webpage_texts.append(f"[Content from {url}:\n{text}]")
+
         channel_id = message.channel.id
         if image_urls:
             _channel_image_cache[channel_id] = (image_urls, time.time())
@@ -2996,6 +3092,20 @@ async def on_message(message):
                                     context_extra += f"\n\n[Profile for {m.display_name} (@{m.name}): created={created}, joined={joined}, status={status_str}, activity={activity_str}, top_role={top_role}, roles={roles}]"
                         if file_extra:
                             context_extra += f"\n\n{file_extra}"
+                        if webpage_texts:
+                            context_extra += "\n\n" + "\n\n".join(webpage_texts)
+
+                        # Inject saved user notes
+                        user_notes = _get_user_notes(message.author.id)
+                        if user_notes:
+                            context_extra += f"\n\n[{user_notes}]"
+
+                        # Detect "remember" for auto-saving notes
+                        remember_match = re.search(r'\bremember\s+(?:that\s+)?(?:i\s+)?(.+)', content_lower)
+                        if remember_match and len(remember_match.group(1)) > 5:
+                            fact = remember_match.group(1).strip().rstrip('.!,')
+                            _save_user_note(message.author.id, "fact", fact)
+                            context_extra += f"\n\n[Note auto-saved: {fact}]"
 
                         admin_keywords = ["mute", "deafen", "voicemute", "kick", "ban", "timeout", "unban", "purge", "lock", "unlock", "slowmode", "addrole", "removerole", "create", "move"]
                         if any(kw in content_lower for kw in admin_keywords):
