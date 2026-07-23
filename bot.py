@@ -6,6 +6,7 @@ import re
 import sqlite3
 import tempfile
 import textwrap
+import time
 from collections import deque
 from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
@@ -2058,7 +2059,7 @@ I'm a real bot with real features. If I say "I can't" and you know I can, call m
 
 CHAT_SYSTEM = textwrap.dedent(f"""\
 You're Null — a Discord bot that's actually cool to talk to. Quick, witty, helpful. No robotic vibes.
-Today: {datetime.now(timezone.utc).strftime('%Y-%m-%d')}.
+Current UTC time: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC.
 {CHAT_CAPABILITIES}
 
 LANGUAGE RULES (IMPORTANT):
@@ -2319,12 +2320,25 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
     else:
         messages.append({"role": "user", "content": prompt})
 
-    response = client.chat.completions.create(
-        model=use_model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
+    for attempt in range(5):
+        try:
+            response = client.chat.completions.create(
+                model=use_model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            break
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "concurrency" in err_str.lower() or "rate_limit" in err_str.lower():
+                wait = 2 ** attempt
+                print(f"[RETRY] AI call rate-limited (attempt {attempt+1}/5), waiting {wait}s: {e}")
+                time.sleep(wait)
+            else:
+                raise
+    else:
+        raise RuntimeError("AI call failed after 5 retries due to rate limits")
     if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
         return response.choices[0].message.content
     return ""
