@@ -2159,17 +2159,26 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                 voice = message.author.voice.channel
                 vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
                 _voice_text_channels[guild.id] = message.channel.id
+                _voice_tts_lang.setdefault(guild.id, "he")
                 loop = asyncio.get_running_loop()
                 guild_id = guild.id
-                def text_cb(user, text):
-                    if not text or len(text.strip()) < 2:
-                        return
-                    try:
-                        coro = _handle_voice_speech(guild_id, user, text.strip(), loop)
-                        asyncio.run_coroutine_threadsafe(coro, loop)
-                    except Exception:
-                        pass
-                sink = SpeechRecognitionSink(text_cb=text_cb, default_recognizer='google', phrase_time_limit=8)
+                lock = _voice_recv_locks.setdefault(guild.id, asyncio.Lock())
+                def make_text_cb():
+                    async def text_cb_async(user, text):
+                        if not text or len(text.strip()) < 2:
+                            return
+                        async with _voice_recv_locks.setdefault(guild_id, asyncio.Lock()):
+                            if not _voice_recv_active.get(guild_id):
+                                return
+                            await _handle_voice_speech(guild_id, user, text.strip(), loop)
+                    def text_cb(user, text):
+                        try:
+                            coro = text_cb_async(user, text)
+                            asyncio.run_coroutine_threadsafe(coro, loop)
+                        except Exception:
+                            pass
+                    return text_cb
+                sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=6, min_audio_length=0.5)
                 vc.listen(sink)
                 _voice_recv_active[guild.id] = True
                 return f":loud_sound: Joined **{voice}** and listening."
@@ -2316,6 +2325,7 @@ LANGUAGE RULES (IMPORTANT):
 - If they write in Arabic (ا-ي), respond in Arabic. NEVER respond in Hebrew.
 - If they write in English, respond in English.
 - Voice messages can also be in Hebrew or English — match the spoken language.
+- This bot's default voice TTS language is Hebrew (he-IL-HilaNeural), so default to Hebrew in voice conversations unless the user speaks English.
 - These two languages look similar but are completely different. Pay close attention to the script.
 - When in doubt, match the user's exact language character by character.
 
@@ -3030,6 +3040,7 @@ _last_search_images: dict[int, list[str]] = {}  # channel_id -> image URLs from 
 _voice_text_channels: dict[int, int] = {}  # guild_id -> text_channel_id for speech context
 _voice_recv_active: dict[int, bool] = {}  # guild_id -> whether voice recv is currently active
 _voice_recv_locks: dict[int, asyncio.Lock] = {}  # guild_id -> lock for serializing speech processing
+_voice_tts_lang: dict[int, str] = {}  # guild_id -> "he" or "en"
 
 
 def _chunk_text(text: str, max_len: int = 1990) -> list[str]:
@@ -4304,7 +4315,26 @@ async def slash_undeafen(interaction: discord.Interaction, member: discord.Membe
     await interaction.response.send_message(result)
 
 
-def _detect_tts_voice(text: str) -> str:
+def _make_process_cb():
+    import speech_recognition as sr
+    def process_cb(recognizer: sr.Recognizer, audio: sr.AudioData, user) -> str | None:
+        for lang in ("he-IL", "en-US"):
+            try:
+                text = recognizer.recognize_google(audio, language=lang)
+                print(f"[VOICE RECV DEBUG] Google recognized ({lang}): '{text}' from {user}")
+                return text
+            except sr.UnknownValueError:
+                continue
+            except sr.RequestError as e:
+                print(f"[VOICE RECV DEBUG] Google API error: {e}")
+                return None
+        return None
+    return process_cb
+
+def _get_tts_voice(guild_id: int | None, text: str) -> str:
+    lang = _voice_tts_lang.get(guild_id) if guild_id else None
+    if lang == "he":
+        return "he-IL-HilaNeural"
     if re.search(r'[\u0590-\u05FF]', text):
         return "he-IL-HilaNeural"
     return "en-US-JennyNeural"
@@ -4317,7 +4347,7 @@ async def _speak_in_voice(guild: discord.Guild, text: str, voice: str | None = N
     try:
         import edge_tts
         if voice is None:
-            voice = _detect_tts_voice(text)
+            voice = _get_tts_voice(guild.id, text)
         communicate = edge_tts.Communicate(text[:200], voice)
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             tmp_path = f.name
@@ -4377,31 +4407,32 @@ async def slash_vjoin(interaction: discord.Interaction):
             except Exception:
                 pass
         return text_cb
-    def make_process_cb():
-        import speech_recognition as sr
-        def process_cb(recognizer: sr.Recognizer, audio: sr.AudioData, user) -> str | None:
-            for lang in ("he-IL", "en-US"):
-                try:
-                    text = recognizer.recognize_google(audio, language=lang)
-                    print(f"[VOICE RECV DEBUG] Google recognized ({lang}): '{text}' from {user}")
-                    return text
-                except sr.UnknownValueError:
-                    continue
-                except sr.RequestError as e:
-                    print(f"[VOICE RECV DEBUG] Google API error: {e}")
-                    return None
-            return None
-        return process_cb
     try:
-        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=make_process_cb(), default_recognizer='google', phrase_time_limit=6, min_audio_length=0.5)
+        sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=6, min_audio_length=0.5)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
     except Exception as e:
         print(f"[VOICE RECV] Failed to start listening: {e}")
         await interaction.followup.send(f":loud_sound: Joined **{voice}** but could not start listening: {e}")
         return
-    await interaction.followup.send(f":loud_sound: Joined **{voice}** and listening. Talk to me!")
+    _voice_tts_lang.setdefault(guild.id, "he")
+    voice_lang = "Hebrew" if _voice_tts_lang[guild.id] == "he" else "English"
+    await interaction.followup.send(f":loud_sound: Joined **{voice}** and listening. TTS language: **{voice_lang}**. Talk to me!")
     print(f"[VOICE] Joined {voice.name} with voice recv in {guild.name}")
+
+
+@bot.tree.command(name="vvoice", description="Set TTS voice language (hebrew or english)")
+@app_commands.describe(language="hebrew or english")
+async def slash_vvoice(interaction: discord.Interaction, language: str):
+    lang = language.lower().strip()
+    if lang in ("he", "hebrew", "iw"):
+        _voice_tts_lang[interaction.guild_id] = "he"
+        await interaction.response.send_message(f":speaking_head: TTS voice set to **Hebrew** (he-IL-HilaNeural)")
+    elif lang in ("en", "english", "us"):
+        _voice_tts_lang[interaction.guild_id] = "en"
+        await interaction.response.send_message(f":speaking_head: TTS voice set to **English** (en-US-JennyNeural)")
+    else:
+        await interaction.response.send_message(f":x: Use `hebrew` or `english`", ephemeral=True)
 
 
 async def _handle_voice_speech(guild_id: int, user, text: str, loop):
@@ -4500,6 +4531,8 @@ async def slash_stopradio(interaction: discord.Interaction):
     if vc:
         _voice_recv_active.pop(interaction.guild_id, None)
         _voice_text_channels.pop(interaction.guild_id, None)
+        _voice_recv_locks.pop(interaction.guild_id, None)
+        _voice_tts_lang.pop(interaction.guild_id, None)
         vc.stop()
         await vc.disconnect()
     await interaction.response.send_message(":stop_button: Stopped.")
