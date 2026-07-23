@@ -2206,6 +2206,7 @@ WHAT I CAN DO:
 - /ticket — ticket system with claims and transcripts
 - /valorantsearch, /valorant, /valorantmmr, /valorantmatches — Valorant stats
 - I see images you attach, I read text files you drop
+- I can generate images from descriptions (try "generate an image of...")
 - I remember the last 50 messages in each channel
 
 I'm a real bot with real features. If I say "I can't" and you know I can, call me out.
@@ -3046,9 +3047,36 @@ async def on_message(message):
                                     return
                                 await message.reply(f":x: No messages in #{target.name}.")
                                 return
-                            except Exception as e:
+                             except Exception as e:
                                 await message.reply(f":x: Could not read that channel: {e}")
                                 return
+
+                        # Image generation
+                        img_keywords = ["generate", "create", "draw", "make", "imagine"]
+                        img_nouns = ["image", "picture", "photo", "art", "drawing", "painting", "render", "illustration", "icon", "banner", "logo", "meme"]
+                        if any(kw in content_lower for kw in img_keywords) and any(noun in content_lower for noun in img_nouns):
+                            await message.channel.typing()
+                            prompt = content
+                            for kw in img_keywords + img_nouns:
+                                prompt = re.sub(r'\b' + kw + r'\b', '', prompt, flags=re.IGNORECASE)
+                            prompt = re.sub(r'\s+', ' ', prompt).strip().strip('.,!?;:')
+                            if not prompt or len(prompt) < 3:
+                                prompt = content
+                            try:
+                            # Pollinations.ai is free, no key needed
+                                img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=1024&height=1024&model=flux&nologo=true"
+                                timeout = aiohttp.ClientTimeout(total=30)
+                                async with aiohttp.ClientSession(timeout=timeout) as session:
+                                    async with session.get(img_url) as resp:
+                                        if resp.status == 200:
+                                            img_data = await resp.read()
+                                            fp = io.BytesIO(img_data)
+                                            await message.reply(file=discord.File(fp, filename="generated.png"), content=f"_{prompt}_")
+                                        else:
+                                            await message.reply(f":x: Image generation failed (status {resp.status})")
+                            except Exception as e:
+                                await message.reply(f":x: Image generation error: {e}")
+                            return
 
                         if replied_content:
                             context_extra += f"\n\n{replied_content}"
