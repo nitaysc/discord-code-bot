@@ -3343,7 +3343,7 @@ async def on_message(message):
                             if visible_answer:
                                 tts_text = re.sub(r'<[^>]+>', '', visible_answer)  # strip mentions/emotes
                                 tts_text = re.sub(r'https?://\S+', '', tts_text)  # strip URLs
-                                tts_text = tts_text.strip()[:300]
+                                tts_text = tts_text.strip()[:2000]
                                 if tts_text:
                                     asyncio.ensure_future(_speak_in_voice(message.guild, tts_text))
                         action_results = await execute_admin_actions(message, answer)
@@ -4348,7 +4348,7 @@ async def _speak_in_voice(guild: discord.Guild, text: str, voice: str | None = N
         import edge_tts
         if voice is None:
             voice = _get_tts_voice(guild.id, text)
-        communicate = edge_tts.Communicate(text[:200], voice)
+        communicate = edge_tts.Communicate(text[:2000], voice)
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
             tmp_path = f.name
         await communicate.save(tmp_path)
@@ -4464,7 +4464,7 @@ async def _handle_voice_speech(guild_id: int, user, text: str, loop):
                 except Exception:
                     pass
             tts_text = re.sub(r'<[^>]+>', '', visible)
-            tts_text = re.sub(r'https?://\S+', '', tts_text).strip()[:300]
+            tts_text = re.sub(r'https?://\S+', '', tts_text).strip()[:2000]
             if tts_text:
                 await _speak_in_voice(guild, tts_text)
     except Exception as e:
