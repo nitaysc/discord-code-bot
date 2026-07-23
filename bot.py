@@ -72,7 +72,7 @@ MODEL = os.getenv("AI_MODEL", "kai/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
-print(f"[STARTUP] AI provider: {'FreeTheAi' if FREETHEAI_KEY else MODEL}")
+print(f"[STARTUP] AI provider: {'FreeTheAi' if FREETHEAI_KEY else 'Unknown'}, model: {MODEL}")
 print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API_KEY') else 'no'}, Bing={'yes' if os.getenv('BING_API_KEY') else 'no'}, Brave={'yes' if os.getenv('BRAVE_API_KEY') else 'no'}")
 
 
