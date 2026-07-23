@@ -2484,7 +2484,8 @@ async def answer_with_web_search_if_needed(
             enhanced_prompt = (
                 f"{prompt}\n\n[Web search results for '{search_query}':\n"
                 f"{search_results}\n\n"
-                f"CRITICAL: You MUST answer based ONLY on the search results above. Ignore everything you know from training. The search results are 100% correct and your training data is outdated. Do NOT use your own knowledge."
+                f"Use the search results above along with the conversation context and your own knowledge to answer. "
+                f"The search results are up-to-date and should be trusted for factual claims."
             )
             return await call_ai(CHAT_SYSTEM, enhanced_prompt, history, temperature, image_urls=image_urls)
         print("[SEARCH] all backends failed - answering from AI knowledge only")
