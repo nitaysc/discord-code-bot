@@ -3234,12 +3234,14 @@ async def on_message(message):
                 num = int(content)
             except ValueError:
                 await message.add_reaction("\u274c")
+                await message.delete()
                 conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, ?, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0", (message.guild.id, highest))
                 conn.commit()
                 conn.close()
                 return
             if message.author.id == last_user:
                 await message.add_reaction("\u274c")
+                await message.delete()
                 conn.close()
                 return
             if num == current + 1:
@@ -3257,6 +3259,7 @@ async def on_message(message):
                 return
             else:
                 await message.add_reaction("\u274c")
+                await message.delete()
                 conn.execute("INSERT INTO counting_stats (guild_id, current_count, highest_count, last_user_id) VALUES (?, 0, ?, 0) ON CONFLICT(guild_id) DO UPDATE SET current_count = 0, last_user_id = 0", (message.guild.id, highest))
                 conn.commit()
                 conn.close()
