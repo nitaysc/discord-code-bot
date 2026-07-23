@@ -4699,7 +4699,7 @@ async def slash_play(interaction: discord.Interaction, query: str):
             await player.queue.put_wait(track)
             await interaction.followup.send(f":musical_note: Added `{track.title}` by `{track.author}` to the queue.")
         if not player.playing:
-            await player.play(player.queue.get(), volume=100)
+            await player.play(player.queue.get(), volume=30)
     except Exception as e:
         await interaction.followup.send(f":x: Play error: {e}")
 
