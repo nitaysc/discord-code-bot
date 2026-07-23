@@ -1,0 +1,57 @@
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  background: #1a1a2e; color: #eee; font-family: 'Segoe UI', Arial, sans-serif;
+  display: flex; flex-direction: column; height: 100vh; overflow: hidden;
+}
+#top-bar {
+  background: #16213e; padding: 8px 16px; display: flex; align-items: center;
+  justify-content: space-between; border-bottom: 2px solid #0f3460; flex-shrink: 0;
+}
+#room-info { display: flex; align-items: center; gap: 16px; font-size: 14px; }
+#room-name { color: #e94560; }
+#user-count { color: #aaa; }
+#toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+}
+#toolbar label { color: #aaa; font-size: 13px; }
+#color-picker {
+  width: 40px; height: 32px; border: 2px solid #0f3460; border-radius: 4px;
+  background: none; cursor: pointer;
+}
+#size-slider { width: 80px; cursor: pointer; }
+#toolbar button {
+  background: #0f3460; color: #eee; border: none; padding: 6px 14px;
+  border-radius: 4px; cursor: pointer; font-size: 14px; transition: 0.2s;
+}
+#toolbar button:hover { background: #e94560; }
+#save-btn { background: #e94560; font-weight: bold; }
+#save-btn:hover { background: #ff6b81; }
+#canvas {
+  flex: 1; cursor: crosshair; display: block;
+  background: #232340; touch-action: none;
+}
+#status-bar {
+  background: #16213e; padding: 4px 16px; font-size: 12px; color: #888;
+  flex-shrink: 0; border-top: 1px solid #0f3460;
+}
+.modal {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.7); display: flex; align-items: center;
+  justify-content: center; z-index: 1000;
+}
+.modal.hidden { display: none; }
+.modal-content {
+  background: #16213e; padding: 24px; border-radius: 12px;
+  max-width: 500px; width: 90%; text-align: center; border: 2px solid #0f3460;
+}
+.modal-content h2 { color: #e94560; margin-bottom: 8px; }
+.modal-content p { color: #aaa; margin-bottom: 16px; }
+.modal-content img {
+  max-width: 100%; max-height: 300px; border-radius: 8px;
+  margin-bottom: 16px; border: 2px solid #0f3460;
+}
+.modal-content button {
+  background: #e94560; color: #fff; border: none; padding: 10px 32px;
+  border-radius: 6px; cursor: pointer; font-size: 16px;
+}
+.modal-content button:hover { background: #ff6b81; }

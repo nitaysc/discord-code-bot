@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Whiteboard</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="top-bar">
+  <div id="room-info">
+    <span id="room-label">Room: <strong id="room-name">loading...</strong></span>
+    <span id="user-count">👤 0</span>
+  </div>
+  <div id="toolbar">
+    <input type="color" id="color-picker" value="#ffffff">
+    <label>Size:</label>
+    <input type="range" id="size-slider" min="1" max="20" value="3">
+    <button id="undo-btn" title="Undo">↩</button>
+    <button id="clear-btn" title="Clear">🗑</button>
+    <button id="save-btn" title="Save to Discord">💾 Save</button>
+  </div>
+</div>
+<canvas id="canvas"></canvas>
+<div id="status-bar">Ready</div>
+<div id="save-modal" class="modal hidden">
+  <div class="modal-content">
+    <h2>Drawing Saved!</h2>
+    <p id="save-message">Your drawing has been posted to Discord.</p>
+    <img id="preview-img" src="" alt="preview">
+    <button id="modal-close">OK</button>
+  </div>
+</div>
+<script src="/script.js"></script>
+</body>
+</html>
