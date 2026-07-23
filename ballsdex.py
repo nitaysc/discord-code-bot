@@ -928,7 +928,7 @@ admin_group = app_commands.Group(name="bsetup", description="Ballsdex admin setu
 @app_commands.describe(channel="The channel for spawning")
 async def cmd_spawn_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     conn = _db()
-    conn.execute("INSERT INTO ballsdex_spawn_settings (guild_id, channel_id) VALUES (?, ?, 1, 30) ON CONFLICT(guild_id, channel_id) DO UPDATE SET spawn_enabled = 1",
+    conn.execute("INSERT INTO ballsdex_spawn_settings (guild_id, channel_id, spawn_enabled, spawn_interval) VALUES (?, ?, 1, 30) ON CONFLICT(guild_id, channel_id) DO UPDATE SET spawn_enabled = 1",
                  (interaction.guild_id, channel.id))
     conn.commit()
     conn.close()
