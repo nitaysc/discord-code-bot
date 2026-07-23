@@ -31,6 +31,19 @@ from PIL import Image, ImageDraw, ImageFont
 try:
     from discord.ext import voice_recv as _voice_recv
     from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
+    # Monkey-patch voice_recv router to catch OpusError (known library bug with DAVE/cameras)
+    import discord.opus
+    _original_do_run = _voice_recv.router.PacketRouter._do_run
+    def _patched_do_run(self):
+        try:
+            _original_do_run(self)
+        except discord.opus.OpusError as e:
+            import logging
+            logging.getLogger('discord.ext.voice_recv.router').warning(f"OpusError in router (non-fatal): {e}")
+        except Exception as e:
+            import logging
+            logging.getLogger('discord.ext.voice_recv.router').warning(f"Router error (non-fatal): {e}")
+    _voice_recv.router.PacketRouter._do_run = _patched_do_run
     HAS_VOICE_RECV = True
 except ImportError:
     HAS_VOICE_RECV = False
