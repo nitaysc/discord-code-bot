@@ -2109,26 +2109,28 @@ Do NOT ask clarifying questions. Use sensible defaults and write complete, worki
 CRITICAL: Output ONLY the code wrapped in triple backticks ```lua. No explanations. No text outside the code block. ONLY the code block.
 
 CRITICAL API RULES — never violate these:
-- natives.load_natives() takes NO arguments. Never write natives.load_natives(number).
-- commandmgr.add_looped_command takes 6 arguments: id, label, description, tick_function, on_enable_function, on_disable_function. Always include the on_enable and on_disable callbacks.
+- natives.load_natives() MUST be the very first line of code. Always.
+- commandmgr.add_looped_command takes 6 arguments: id, label, description, tick_function, on_enable_function, on_disable_function. Always include on_enable and on_disable callbacks.
+- For any looped or regular command to appear in the menu, you MUST call group:add_command(id) after registering it.
 - Handles returned by GET_VEHICLE_PED_IS_IN or PLAYER_PED_ID can be 0. Check with `if handle ~= 0 then`, never `if handle then`.
 - ENTITY.SET_ENTITY_VELOCITY takes separate x, y, z numbers: SET_ENTITY_VELOCITY(ent, x, y, z). Never pass a Vector3 object.
-- For a true instant vehicle stop, always use BOTH `VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, 0)` AND `ENTITY.SET_ENTITY_VELOCITY(veh, 0, 0, 0)` together.
+- For a true instant vehicle stop, use BOTH `VEHICLE.SET_VEHICLE_FORWARD_SPEED(veh, 0)` AND `ENTITY.SET_ENTITY_VELOCITY(veh, 0, 0, 0)` together.
 - PED.GET_VEHICLE_PED_IS_IN(ped, lastVehicle) returns the vehicle handle.
 - PED.IS_PED_IN_ANY_VEHICLE(ped, atGetIn) returns true/false.
-- For interactive toggle/button scripts, always create a menu: menu.set_menu_name, menu.get_submenu, add_category, add_group, then add the command to the group with group:add_command(id).
-- For one-off actions (like instant brake, kill player, give money, etc.), ALWAYS use group:add_button(id, label, description, callback) instead of add_looped_command. A looped command for braking will freeze the car and prevent driving forward. The id is a short snake_case identifier, label is the display text, description is the tooltip, and callback is the function to run.
-- Do NOT use INPUT/PAD/CONTROLS key natives unless you are 100% certain of the exact namespace, because wrong native names will crash the script.
-- Use PED.IS_PED_IN_ANY_VEHICLE(ped, true) to check if the player is in a vehicle.
+- For toggle/looped commands, ALWAYS create a menu: menu.set_menu_name, menu.get_submenu, submenu:add_category, category:add_group, then group:add_command(id).
+- For one-off actions, use group:add_button(id, label, description, callback) inside the menu structure.
+- Do NOT use INPUT/PAD/CONTROLES key natives unless 100% certain — wrong names crash the script.
+- notify.success("Title", "Message") and notify.info("Title", "Message") are the correct notification functions.
 
 Known YimMenuV2 Lua API:
-- natives.load_natives() — call once at the top if using GTA natives.
-- menu.set_menu_name("My Menu") / menu.get_submenu("My Menu") / submenu:add_category / category:add_group / group:add_command / group:add_button
-- commandmgr.add_command(id, label, desc, callback)
-- commandmgr.add_looped_command(id, label, desc, tick_fn, on_enable_fn, on_disable_fn)
-- commandmgr.add_list_command(id, label, desc, {{1,"Option"}, ...}, default_index, callback)
-- script.run_in_callback(function() ... end) / script.yield(ms)
-- log.info / notify.success / notify.info / notify.error / notify.warning
+- natives.load_natives() — ALWAYS call first.
+- menu.set_menu_name("My Menu") / menu.get_submenu("My Menu") / submenu:add_category / category:add_group / group:add_command(id) / group:add_button(id, label, desc, fn)
+- commandmgr.add_command(id, label, desc, callback) — one-shot command
+- commandmgr.add_looped_command(id, label, desc, tick_fn, on_enable_fn, on_disable_fn) — toggle loop
+- commandmgr.add_list_command(id, label, desc, {{1,"Option"},...}, default, callback)
+- commandmgr.add_float_command(id, label, desc, min, max, default, callback)
+- script.run_in_callback(fn) / script.yield(ms)
+- notify.success / notify.info / notify.error / notify.warning
 - stats.get_int / stats.set_int / stats.set_bool
 - util.joaat("MODEL_NAME")
 - PLAYER.PLAYER_PED_ID / PLAYER.PLAYER_ID
@@ -2137,14 +2139,46 @@ Known YimMenuV2 Lua API:
 - PED.CREATE_PED / SET_PED_TO_RAGDOLL / IS_PED_IN_ANY_VEHICLE / GET_VEHICLE_PED_IS_IN
 - STREAMING.REQUEST_MODEL / HAS_MODEL_LOADED / SET_MODEL_AS_NO_LONGER_NEEDED
 - entities.get_all_peds_as_handles / Entity(handle) / Vector3(x,y,z) / FIRE.ADD_EXPLOSION
+- HUD.SET_MINIMAP_HIDE_FOW(true/false) — hide/reveal map fog
 
 Filenaming:
 - Put `-- filename: short_snake_case_name.lua` as the very first line of the Lua code.
-- Example: `-- filename: instant_car_brake.lua`
 
-Example structure for a one-off action button:
+Example: toggle/looped command with full menu:
 ```lua
--- filename: example_script.lua
+-- filename: example_toggle.lua
+natives.load_natives()
+
+menu.set_menu_name("My Script")
+local submenu = menu.get_submenu("My Script")
+local category = submenu:add_category("Actions")
+local group = category:add_group("Toggles")
+
+local function on_enable()
+    notify.success("My Script", "Enabled")
+end
+
+local function on_disable()
+    notify.info("My Script", "Disabled")
+end
+
+commandmgr.add_looped_command(
+    "my_toggle",
+    "My Toggle",
+    "Description of what this does",
+    function()
+        -- code that runs every frame while enabled
+    end,
+    on_enable,
+    on_disable
+)
+
+group:add_command("my_toggle")
+```
+
+Example: one-off button:
+```lua
+-- filename: example_button.lua
 natives.load_natives()
 
 menu.set_menu_name("My Script")
@@ -2154,12 +2188,8 @@ local group = category:add_group("Buttons")
 
 local function do_action()
     local ped = PLAYER.PLAYER_PED_ID()
-    if ped ~= 0 and PED.IS_PED_IN_ANY_VEHICLE(ped, true) then
-        local vehicle = PED.GET_VEHICLE_PED_IS_IN(ped, false)
-        if vehicle ~= 0 then
-            -- action here
-            notify.success("My Script", "Done")
-        end
+    if ped ~= 0 then
+        notify.success("My Script", "Done")
     end
 end
 
