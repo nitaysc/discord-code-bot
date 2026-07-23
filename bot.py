@@ -3095,7 +3095,7 @@ async def on_message(message):
                                 prompt = f"{prev_prompt}, {prompt}"
                             try:
                                 seed = random.randint(1, 999999)
-                                img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=1024&height=1024&model=flux&nologo=true&seed={seed}"
+                                img_url = f"https://image.pollinations.ai/prompt/{quote(prompt)}?width=1024&height=1024&model=flux&nologo=true&seed={seed}&enhance=true&quality=hd"
                                 timeout = aiohttp.ClientTimeout(total=30)
                                 async with aiohttp.ClientSession(timeout=timeout) as session:
                                     async with session.get(img_url) as resp:
