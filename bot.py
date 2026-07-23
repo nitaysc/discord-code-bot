@@ -63,6 +63,9 @@ FREETHEAI_KEY = os.getenv("FREETHEAI_API_KEY")
 HENRIKDEV_KEY = os.getenv("HENRIKDEV_API_KEY")
 GROQ_KEY = os.getenv("GROQ_API_KEY")
 GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY")
+MISTRAL_KEY = os.getenv("MISTRAL_API_KEY")
+TOGETHER_KEY = os.getenv("TOGETHER_API_KEY")
 
 if not TOKEN:
     raise RuntimeError("Missing DISCORD_TOKEN in .env file")
@@ -103,6 +106,12 @@ if GROQ_KEY:
     _register_provider("Groq", "https://api.groq.com/openai/v1", GROQ_KEY, "llama-3.3-70b-versatile", "llama-3.2-11b-vision-preview")
 if GEMINI_KEY:
     _register_provider("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai/", GEMINI_KEY, "gemini-2.0-flash", "gemini-2.0-flash")
+if DEEPSEEK_KEY:
+    _register_provider("DeepSeek", "https://api.deepseek.com", DEEPSEEK_KEY, "deepseek-chat", "deepseek-chat")
+if MISTRAL_KEY:
+    _register_provider("Mistral", "https://api.mistral.ai/v1", MISTRAL_KEY, "mistral-small-latest", "mistral-small-latest")
+if TOGETHER_KEY:
+    _register_provider("Together", "https://api.together.xyz/v1", TOGETHER_KEY, "meta-llama/Llama-3.3-70B-Instruct-Turbo", "meta-llama/Llama-3.3-70B-Instruct-Turbo")
 if os.getenv("OPENAI_API_KEY"):
     _register_provider("OpenAI", "https://api.openai.com/v1", os.getenv("OPENAI_API_KEY"), "gpt-4o-mini", "gpt-4o-mini")
 
