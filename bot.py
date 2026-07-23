@@ -68,7 +68,7 @@ else:
         api_key=os.getenv("GEMINI_API_KEY"),
     )
 
-MODEL = os.getenv("AI_MODEL", "kai/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free" if FREETHEAI_KEY else "openrouter/free")
+MODEL = os.getenv("AI_MODEL", "kai/openrouter/free" if FREETHEAI_KEY else "openrouter/free")
 if MODEL.startswith("AI_MODEL="):
     MODEL = MODEL[len("AI_MODEL="):]
 
@@ -2323,7 +2323,9 @@ def _call_ai(system: str, prompt: str, history: list[dict] | None = None,
         temperature=temperature,
         max_tokens=max_tokens,
     )
-    return response.choices[0].message.content or ""
+    if response.choices and len(response.choices) > 0 and response.choices[0].message.content:
+        return response.choices[0].message.content
+    return ""
 
 
 async def call_ai(system: str, prompt: str, history: list[dict] | None = None,
