@@ -11,6 +11,21 @@ except ImportError:
     pass
 
 
+class NoopWorld:
+    """Discards all chunk data to save memory."""
+    registry = None
+    min_y = -64
+    view_chunk_x = 0
+    view_chunk_z = 0
+    def known_block_count(self): return 0
+    def known_chunk_count(self): return 0
+    def set_block(self, *a, **kw): pass
+    def get_block(self, *a, **kw): return None
+    def unload_chunk(self, *a, **kw): pass
+    def load_chunk_data(self, *a, **kw): return 0
+    def snapshot(self): return self
+
+
 class MCBotManager:
     def __init__(self):
         self.bot: Optional[Bot] = None
@@ -42,10 +57,11 @@ class MCBotManager:
         self._mc_channel_id = mc_channel_id
         self._loop = asyncio.get_running_loop()
         try:
-            self.bot = Bot(host=host, port=port, account=None, auto_reconnect=True, send_client_ticks=False)
+            self.bot = Bot(host=host, port=port, account=None, auto_reconnect=True, send_client_ticks=False, physics=False)
             self.bot.client.account = "mcbot"
             self.bot.client.username = username
             self.bot.client.uuid = str(uuid.uuid4())
+            self.bot.client.world = NoopWorld()
 
             @self.bot.event
             async def on_chat(message):
