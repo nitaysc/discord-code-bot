@@ -2244,19 +2244,15 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                     err_str = str(e1).lower()
                     if "wavelink" in err_str or "node" in err_str or "pool" in err_str:
                         import wavelink as _wl
+                        import asyncio as _asyncio
                         _fallback_nodes = [
-                            _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
-                            _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
-                            _wl.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
-                            _wl.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
-                            _wl.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud"),
-                            _wl.Node(uri="http://lavalink.horizxon.studio:80", password="horizxon.studio"),
-                            _wl.Node(uri="http://node1.lavalink.lexnet.cc:80", password="lexnetic"),
-                            _wl.Node(uri="http://lavalink.lexnet.cc:2333", password="lexnetic"),
+                            _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
+                            _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
+                            _wl.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
                         ]
                         for _n in _fallback_nodes:
                             try:
-                                await _wl.Pool.connect(nodes=[_n], client=bot)
+                                await _asyncio.wait_for(_wl.Pool.connect(nodes=[_n], client=bot), timeout=15)
                             except:
                                 continue
                         vc = await voice.connect(cls=_voice_recv.VoiceRecvClient)
@@ -3092,19 +3088,14 @@ class CodeBot(commands.Bot):
 
     async def setup_hook(self):
         nodes = [
-            wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
-            wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
-            wavelink.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
-            wavelink.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
-            wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud"),
-            wavelink.Node(uri="http://lavalink.horizxon.studio:80", password="horizxon.studio"),
-            wavelink.Node(uri="http://node1.lavalink.lexnet.cc:80", password="lexnetic"),
-            wavelink.Node(uri="http://lavalink.lexnet.cc:2333", password="lexnetic"),
+            wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
+            wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
+            wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
         ]
         connected = 0
         for node in nodes:
             try:
-                await wavelink.Pool.connect(nodes=[node], client=self)
+                await asyncio.wait_for(wavelink.Pool.connect(nodes=[node], client=self), timeout=15)
                 print(f"Wavelink connected: {node.uri}")
                 connected += 1
             except Exception as e:
@@ -4638,19 +4629,15 @@ async def slash_vjoin(interaction: discord.Interaction):
         if "wavelink" in err_str or "node" in err_str or "pool" in err_str:
             print("[VJOIN] wavelink node down, reconnecting...")
             import wavelink as _wl
+            import asyncio as _asyncio
             _fallback_nodes = [
-                _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
-                _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
-                _wl.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
-                _wl.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
-                _wl.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud"),
-                _wl.Node(uri="http://lavalink.horizxon.studio:80", password="horizxon.studio"),
-                _wl.Node(uri="http://node1.lavalink.lexnet.cc:80", password="lexnetic"),
-                _wl.Node(uri="http://lavalink.lexnet.cc:2333", password="lexnetic"),
+                _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
+                _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
+                _wl.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
             ]
             for _n in _fallback_nodes:
                 try:
-                    await _wl.Pool.connect(nodes=[_n], client=bot)
+                    await _asyncio.wait_for(_wl.Pool.connect(nodes=[_n], client=bot), timeout=15)
                     print(f"[VJOIN] reconnected wavelink: {_n.uri}")
                 except:
                     continue
@@ -4876,18 +4863,13 @@ async def slash_play(interaction: discord.Interaction, query: str):
             err_str = str(e).lower()
             if "wavelink" in err_str or "node" in err_str or "pool" in err_str:
                 _fallback_nodes = [
-                    wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass"),
-                    wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord"),
-                    wavelink.Node(uri="http://lava.g3v.co.uk:9008", password="lavalinklol"),
-                    wavelink.Node(uri="http://lavalink.triniumhost.com:4333", password="free"),
-                    wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud"),
-                    wavelink.Node(uri="http://lavalink.horizxon.studio:80", password="horizxon.studio"),
-                    wavelink.Node(uri="http://node1.lavalink.lexnet.cc:80", password="lexnetic"),
-                    wavelink.Node(uri="http://lavalink.lexnet.cc:2333", password="lexnetic"),
+                    wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
+                    wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
+                    wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
                 ]
                 for _n in _fallback_nodes:
                     try:
-                        await wavelink.Pool.connect(nodes=[_n], client=bot)
+                        await asyncio.wait_for(wavelink.Pool.connect(nodes=[_n], client=bot), timeout=15)
                     except:
                         continue
                 player = await voice.connect(cls=wavelink.Player)
