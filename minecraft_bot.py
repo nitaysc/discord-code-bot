@@ -59,9 +59,11 @@ class MCBotManager:
         try:
             self.bot = Bot(host=host, port=port, account=None, auto_reconnect=True, send_client_ticks=False, physics=False)
             self.bot.client.account = "mcbot"
+            self.bot.client.world = NoopWorld()
+            self.bot.client.host = host
+            self.bot.client.port = port
             self.bot.client.username = username
             self.bot.client.uuid = str(uuid.uuid4())
-            self.bot.client.world = NoopWorld()
 
             @self.bot.event
             async def on_chat(message):
