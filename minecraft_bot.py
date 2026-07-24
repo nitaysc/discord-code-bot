@@ -42,7 +42,7 @@ class MCBotManager:
         self._mc_channel_id = mc_channel_id
         self._loop = asyncio.get_running_loop()
         try:
-            self.bot = Bot(host=host, port=port, account=None)
+            self.bot = Bot(host=host, port=port, account=None, auto_reconnect=True, send_client_ticks=False)
             self.bot.client.account = "mcbot"
             self.bot.client.username = username
             self.bot.client.uuid = str(uuid.uuid4())
@@ -50,7 +50,8 @@ class MCBotManager:
             @self.bot.event
             async def on_chat(message):
                 if self._chat_callback:
-                    await self._chat_callback(message.sender, message.clean)
+                    sender = message.sender or "Server"
+                    await self._chat_callback(sender, message.clean)
 
             @self.bot.event
             async def on_ready():
@@ -60,6 +61,10 @@ class MCBotManager:
             async def on_disconnect(reason):
                 print(f"[MC BOT] Disconnected: {reason}")
                 self._connected = False
+
+            @self.bot.event
+            async def on_error(exc):
+                print(f"[MC BOT] Play loop error: {exc}")
 
             await self.bot.client.connect()
             self._connected = True
