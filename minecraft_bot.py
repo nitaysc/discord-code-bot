@@ -42,7 +42,8 @@ class MCBotManager:
         self._mc_channel_id = mc_channel_id
         self._loop = asyncio.get_running_loop()
         try:
-            self.bot = Bot(host=host, port=port, account="offline")
+            self.bot = Bot(host=host, port=port, account=None)
+            self.bot.client.account = "mcbot"
             self.bot.client.username = username
             self.bot.client.uuid = str(uuid.uuid4())
 
@@ -60,7 +61,7 @@ class MCBotManager:
                 print(f"[MC BOT] Disconnected: {reason}")
                 self._connected = False
 
-            await self.bot.start()
+            await self.bot.client.connect()
             self._connected = True
             return f":white_check_mark: Joined **{host}:{port}** as **{username}**"
         except Exception as e:
