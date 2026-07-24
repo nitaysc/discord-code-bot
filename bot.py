@@ -2248,7 +2248,6 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                         _fallback_nodes = [
                             _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
                             _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
-                            _wl.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
                         ]
                         for _n in _fallback_nodes:
                             try:
@@ -3090,7 +3089,6 @@ class CodeBot(commands.Bot):
         nodes = [
             wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
             wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
-            wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
         ]
         connected = 0
         for node in nodes:
@@ -4633,7 +4631,6 @@ async def slash_vjoin(interaction: discord.Interaction):
             _fallback_nodes = [
                 _wl.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
                 _wl.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
-                _wl.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
             ]
             for _n in _fallback_nodes:
                 try:
@@ -4865,7 +4862,6 @@ async def slash_play(interaction: discord.Interaction, query: str):
                 _fallback_nodes = [
                     wavelink.Node(uri="http://lavalink.jirayu.net:13592", password="youshallnotpass", retries=1),
                     wavelink.Node(uri="http://lavalinkv4.serenetia.com:80", password="https://seretia.link/discord", retries=1),
-                    wavelink.Node(uri="http://n3.nexcloud.in:2026", password="nexcloud", retries=1),
                 ]
                 for _n in _fallback_nodes:
                     try:
