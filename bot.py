@@ -6120,6 +6120,9 @@ CodeBot.setup_hook = _patched_setup_hook
 
 
 _mc_bot = MCBotManager()
+if HAS_MC_BOT:
+    print("[STARTUP] Pre-loading Minecraft bot...")
+    _mc_bot._init_bot()
 
 _mc_mc_group = discord.app_commands.Group(name="mc", description="Minecraft bot commands")
 

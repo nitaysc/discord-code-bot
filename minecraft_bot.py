@@ -38,6 +38,14 @@ class MCBotManager:
         self.server_host = ""
         self.server_port = 25565
         self.bot_username = "NullBot"
+        self._events_registered = False
+
+    def _init_bot(self):
+        """Pre-create the Bot instance at startup to spread out memory cost."""
+        if HAS_MC_BOT and not self.bot:
+            self.bot = Bot(host="localhost", port=25565, account=None, auto_reconnect=True, send_client_ticks=False, physics=False)
+            self.bot.client.account = "mcbot"
+            self.bot.client.world = NoopWorld()
 
     @property
     def connected(self) -> bool:
@@ -57,32 +65,32 @@ class MCBotManager:
         self._mc_channel_id = mc_channel_id
         self._loop = asyncio.get_running_loop()
         try:
-            self.bot = Bot(host=host, port=port, account=None, auto_reconnect=True, send_client_ticks=False, physics=False)
-            self.bot.client.account = "mcbot"
-            self.bot.client.world = NoopWorld()
+            if not self.bot:
+                self._init_bot()
+            if not self._events_registered:
+                self._events_registered = True
+                @self.bot.event
+                async def on_chat(message):
+                    if self._chat_callback:
+                        sender = message.sender or "Server"
+                        await self._chat_callback(sender, message.clean)
+
+                @self.bot.event
+                async def on_ready():
+                    print(f"[MC BOT] Connected as {self.bot.username} to {self.server_host}:{self.server_port}")
+
+                @self.bot.event
+                async def on_disconnect(reason):
+                    print(f"[MC BOT] Disconnected: {reason}")
+                    self._connected = False
+
+                @self.bot.event
+                async def on_error(exc):
+                    print(f"[MC BOT] Play loop error: {exc}")
             self.bot.client.host = host
             self.bot.client.port = port
             self.bot.client.username = username
             self.bot.client.uuid = str(uuid.uuid4())
-
-            @self.bot.event
-            async def on_chat(message):
-                if self._chat_callback:
-                    sender = message.sender or "Server"
-                    await self._chat_callback(sender, message.clean)
-
-            @self.bot.event
-            async def on_ready():
-                print(f"[MC BOT] Connected as {self.bot.username} to {host}:{port}")
-
-            @self.bot.event
-            async def on_disconnect(reason):
-                print(f"[MC BOT] Disconnected: {reason}")
-                self._connected = False
-
-            @self.bot.event
-            async def on_error(exc):
-                print(f"[MC BOT] Play loop error: {exc}")
 
             await self.bot.client.connect()
             self._connected = True
