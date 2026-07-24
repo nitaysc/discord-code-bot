@@ -26,12 +26,10 @@ from dotenv import load_dotenv
 from openai import OpenAI
 import wavelink
 from minecraft_bot import MCBotManager, HAS_MC_BOT
-from ddgs import DDGS
-from PIL import Image, ImageDraw, ImageFont
+
 
 try:
     from discord.ext import voice_recv as _voice_recv
-    from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
     # Monkey-patch voice_recv router to catch OpusError (known library bug with DAVE/cameras)
     import discord.opus
     _original_do_run = _voice_recv.router.PacketRouter._do_run
@@ -49,7 +47,6 @@ try:
 except ImportError:
     HAS_VOICE_RECV = False
     _voice_recv = None
-    SpeechRecognitionSink = None
 
 load_dotenv()
 
@@ -134,6 +131,7 @@ print(f"[STARTUP] Search keys detected: SerpApi={'yes' if os.getenv('SERPAPI_API
 
 
 def _search_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
+    from ddgs import DDGS
     last_err = None
     for attempt in range(3):
         try:
@@ -151,6 +149,7 @@ def _search_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
 
 
 def _search_images_duckduckgo(query: str, max_results: int = 5) -> list[dict]:
+    from ddgs import DDGS
     last_err = None
     for attempt in range(3):
         try:
@@ -2277,6 +2276,7 @@ async def _dispatch_admin_action(message: discord.Message, action: str, args: li
                         except Exception:
                             pass
                     return text_cb
+                from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
                 sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=15)
                 vc.listen(sink)
                 _voice_recv_active[guild.id] = True
@@ -2319,6 +2319,7 @@ async def read_attachment(att: discord.Attachment, max_bytes: int = 50000) -> tu
 
 
 def _get_font(size: int):
+    from PIL import ImageFont
     for font_name in ["arial.ttf", "DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]:
         try:
             return ImageFont.truetype(font_name, size)
@@ -2328,6 +2329,7 @@ def _get_font(size: int):
 
 
 async def generate_rank_card(member: discord.Member, data: dict) -> io.BytesIO:
+    from PIL import Image, ImageDraw, ImageFont
     width, height = 800, 250
     bg = Image.new("RGB", (width, height), "#1a1b26")
     draw = ImageDraw.Draw(bg)
@@ -4664,6 +4666,7 @@ async def slash_vjoin(interaction: discord.Interaction):
                 pass
         return text_cb
     try:
+        from discord.ext.voice_recv.extras.speechrecognition import SpeechRecognitionSink
         sink = SpeechRecognitionSink(text_cb=make_text_cb(), process_cb=_make_process_cb(), default_recognizer='google', phrase_time_limit=15)
         vc.listen(sink)
         _voice_recv_active[guild.id] = True
@@ -6207,7 +6210,7 @@ bot.tree.add_command(_mc_mc_group)
 # =============================================================================
 
 import io as _io
-from PIL import Image, ImageDraw, ImageFont, ImageFilter as _ImageFilter
+
 import textwrap as _textwrap
 
 def _get_welcome_settings(guild_id: int) -> dict | None:
@@ -6261,6 +6264,7 @@ def _format_welcome_text(template: str, member: discord.Member, guild: discord.G
 
 async def _generate_welcome_image(member: discord.Member, guild: discord.Guild, bg_url: str | None = None) -> _io.BytesIO | None:
     try:
+        from PIL import Image, ImageDraw, ImageFont
         import aiohttp
         width, height = 800, 400
         img = Image.new("RGBA", (width, height), (30, 30, 40, 255))
